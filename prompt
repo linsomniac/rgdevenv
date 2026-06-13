@@ -1,0 +1,28 @@
+I want to create a Golang service that is kind of like traefik: An HTTPS proxy server
+with The ability to set up and manage multiple virtual dev environments.  It would also
+have a web-based management interface.   Here are some of the features:
+
+It would use a self-signed cert, likely a wildcard like "*.sean.realgo.com".  It would
+have an API and a CLI tool that would allow functions like:
+
+    - add/delete load balancer: Add/delete a name to the load balancer like
+      "RG-27788-cpcart-cleanups.sean.realgo.com"
+    - request/return a port: The service would have a range of ports that it would keep track of
+      and give back (and track) a port.  For example, maybe we have defined that ports
+      9000-9999 are available, and it has tracked that it has previously given out
+      9000-9010, so it now give out 9011.
+    - add/delete a mapping to a load balancer: Given a load balancer, map port X on it to
+      go to port Y on the local machine.  For example, "Forward connections on
+      RG-27788-cpcart-cleanups.sean.realgo.com on port 443 to port 9011 on localhost".
+
+Forwardings could be localhost or could be another hostname, and the endpoint could be
+HTTPS or just regular HTTP.  Make a decision about whether a general TCP/TLS+TCP endpoint
+should be supported as well, this could be a future decision.  We probably also need to
+be able to support connections that have a self-signed CA cert, and maybe also support a
+"don't verify remote cert" option, as this is a development server.
+
+There would be a web management UI available on the proxy so that you could see the
+configured load balancers, easily hit the website on that load balancer, and see what
+ports are mapped for it.
+
+Please ask any clarifying questions before you begin work. 
