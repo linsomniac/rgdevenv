@@ -58,9 +58,9 @@ bind their reserved ports themselves (see §11).
 | Protocols (v1) | HTTP/HTTPS only; raw TCP is a future listener mode |
 | Listeners | Always-on `:443` HTTPS + `:80` redirect; other ports on demand, **disjoint from the port pool** |
 | TLS cert | Supply-only (cert/key paths); no generation/ACME |
-| Upstream TLS | `verify` / `ca` (named CA from a server-side CA dir) / `skip` |
+| Upstream TLS | `verify` (system roots) / `ca` (named **private** CA only, server-side CA dir) / `skip` |
 | Port pool | Registry-only reservations; apps bind directly; OS still owns binding |
-| Management access | Reserved hostname over `:443`, **bearer-token only**, rate-limited, constant-time compare; **optional** separate management bind (default off) |
+| Management access | Reserved hostname over `:443`, **bearer-token only**, rate-limited, constant-time compare; **optional** separate management bind (default off; loopback/unix **plaintext**) |
 | Upstream policy | localhost allowed; other hosts require an allowlist; link-local / cloud-metadata / self-listener always denied |
 | UI auth | Bearer-only (token in `sessionStorage`, `Authorization` header); no cookies, no CSRF surface |
 | Web UI scope | Full CRUD + quick-launch links + status |
@@ -110,7 +110,9 @@ certificate matching.
   scope is the pair `(name, listen_port)`).
 - **Upstream** — `scheme` (`http`|`https`), `host`, `port`, and (for `https`) a
   `tls` block `{ mode: verify|ca|skip, ca_name? }`. Exactly one per mapping.
-  `host` must satisfy the upstream policy (§15).
+  `host` must satisfy the upstream policy (§15). For `mode = ca`, `ca_name` must be
+  a **path-safe identifier** (no path separators or `..`) resolving to
+  `<ca_dir>/<ca_name>.pem` (§7).
 - **PortAllocation** — a reserved port from the pool. Fields: `id` (stable
   reference), `port`, `owner` (optional, usually a LoadBalancer name), `label`,
   `auto` (true if created by the auto-allocate convenience), `allocated_at`.
@@ -129,8 +131,11 @@ Cardinalities: `LoadBalancer 0—N Mapping`, `Mapping 1—1 Upstream`, `Mapping
   §16). Default TLS mode is HTTPS; `listen_tls = false` makes it plain HTTP. When
   the last mapping on an on-demand port is removed, its listener is closed.
 - **Port-pool disjointness:** a `listen_port` must lie **outside**
-  `[pool.start, pool.end]` and must not equal the management bind port. This keeps
-  proxy listeners from colliding with reserved application ports.
+  `[pool.start, pool.end]` and must not equal `http_port`, `https_port`, or the
+  `management.bind` port. Conversely, the pool range itself must **not** contain
+  any of those always-on/management ports; both directions are validated at
+  startup (§16). This keeps proxy listeners from colliding with reserved
+  application ports.
 - **One TLS mode per port:** a `listen_port` has exactly one TLS mode across all
   mappings/hosts. A mapping whose `listen_tls` conflicts with the port's
   established mode is rejected (`409 Conflict`).
@@ -141,9 +146,12 @@ Cardinalities: `LoadBalancer 0—N Mapping`, `Mapping 1—1 Upstream`, `Mapping
   served certificate is refused.
 - **Management routing:** if a separate `management.bind` is configured, the
   management plane is served only there and is **not** reachable via the data
-  plane. Otherwise it is served on the HTTPS listener when the canonical Host
-  equals `management_hostname` (after auth). Creating a load balancer named
-  `management_hostname` is forbidden.
+  plane. That bind is **plaintext** and permitted only on a loopback address or a
+  unix socket (a non-loopback plaintext bind is refused at startup); the bearer
+  token is still required, and confidentiality for remote use comes from an SSH
+  tunnel (§15). Otherwise the management plane is served on the HTTPS listener
+  when the canonical Host equals `management_hostname` (after auth). Creating a
+  load balancer named `management_hostname` is forbidden.
 - **HTTP→HTTPS redirect:** the `:80` listener issues a `308` redirect **only** for
   hosts that are known/canonical and certificate-covered, to a canonical
   `https://<host>:<https_port>` URL (port omitted when `443`). Arbitrary/unknown
@@ -159,13 +167,22 @@ Cardinalities: `LoadBalancer 0—N Mapping`, `Mapping 1—1 Upstream`, `Mapping
   outside rgdevenv (developers install the CA into their trust stores).
 - **Reload:** `SIGHUP` reloads the certificate(s), the custom-CA directory, and
   runtime-safe config (e.g. log level), without dropping existing connections
-  where practical.
+  where practical. Reload is **validate-before-swap**: new material is parsed and
+  validated first, and on any failure the previously loaded certs/CAs are
+  **retained** (the reload is a logged no-op) — verification is never silently
+  downgraded. If reloaded material no longer covers a mapping's host or the
+  management hostname, the affected mapping is marked **degraded** (and a
+  management-hostname mismatch is surfaced loudly) rather than served with weaker
+  trust.
 - **Upstream TLS** (for `https` upstreams):
   - `verify` — verify against the system root pool.
-  - `ca` — verify against the system roots **plus** the named CA loaded from the
-    server-side `ca_dir` (`ca_name` resolves to `<ca_dir>/<ca_name>.pem`); custom
-    roots **extend** system roots. A missing/invalid `ca_name` makes the mapping
-    invalid (rejected on create; degraded on startup).
+  - `ca` — verify against **only** the named private CA loaded from the
+    server-side `ca_dir`; system roots are **not** trusted in this mode (use
+    `verify` for publicly-trusted upstreams). `ca_name` must be a **path-safe
+    identifier** (no path separators or `..`) resolving to `<ca_dir>/<ca_name>.pem`.
+    A missing/invalid/unsafe `ca_name` makes the mapping invalid: **rejected** on
+    create, and on startup the mapping is marked **degraded** and does **not**
+    serve (fail-closed — never downgraded to a weaker mode).
   - `skip` — `InsecureSkipVerify` (dev-only).
   - `ServerName` for verification defaults to the upstream `host`.
 
@@ -193,13 +210,19 @@ Cardinalities: `LoadBalancer 0—N Mapping`, `Mapping 1—1 Upstream`, `Mapping
   `ResponseHeaderTimeout`, `MaxIdleConns`/`MaxIdleConnsPerHost`, and an idle-conn
   timeout. WebSocket/streaming connections bypass the response-header/write
   deadlines but are subject to an overall max-duration cap.
+- The transport's `DialContext` is a single shared **safe dialer** (§15): it
+  resolves the upstream name, validates **every** returned address against the deny
+  rules, then dials a **pinned** validated IP — it never lets the OS re-resolve,
+  closing the DNS-rebinding gap. The health checker (§17) uses the same dialer.
 
 **Management plane:**
 1. Browser/CLI → `https://rgdevenv.sean.realgo.com/...` (or the management bind),
    `/api/v1/...`.
 2. **Bearer-only** auth: `Authorization: Bearer <token>`, compared in constant
    time. Failure → `401`; repeated failures per source IP are rate-limited →
-   `429`. No cookies are used.
+   `429`. No cookies are used. The only unauthenticated surface is `/healthz` and
+   the **static login shell** (HTML/CSS/JS containing no dynamic data); every
+   `/api/v1/*` call and all dynamic data require the bearer.
 3. The handler validates the request and applies it through the staged
    transaction (§16).
 
@@ -232,11 +255,12 @@ token_file = "/etc/rgdevenv/token"      # 0600; or RGDEVENV_TOKEN. >= 256-bit ra
 state_file = "/var/lib/rgdevenv/state.json"
 
 [management]
-# bind = "127.0.0.1:8443"               # optional isolated mgmt listener; empty = via wildcard :443
+# bind = "127.0.0.1:8443"               # optional isolated mgmt listener: loopback/unix, PLAINTEXT
+                                        # (non-loopback plaintext refused); empty = via wildcard :443
 auth_rate_limit_per_min = 10            # failed-auth attempts per source IP -> 429
 
 [port_pool]
-start = 9000
+start = 9000                            # range must exclude http_port/https_port/mgmt bind port
 end   = 9999
 
 [upstreams]
@@ -267,7 +291,11 @@ immutable snapshot published atomically (§16).
   diagnostic.
 - A listener port that cannot be bound (e.g. taken) → start anyway, mark the
   affected mapping **degraded**, and surface it in `/status`/logs.
-- Reconcile port allocations against mappings.
+- A crash after persist but before publish (§16) is benign: startup loads the
+  **persisted (committed)** state and re-derives runtime from it.
+- **Reconcile port allocations against mappings:** free orphaned `auto=true`
+  allocations whose mapping no longer exists; an allocation that conflicts with a
+  mapping or another allocation is a hard error (abort with a diagnostic).
 
 ```json
 {
@@ -308,7 +336,9 @@ immutable snapshot published atomically (§16).
   `allocate=true` (CLI `--allocate`) allocates a port (`auto=true`), wires the
   upstream to `http://localhost:<port>`, and links it via `allocation_id`.
 - **Cascade:** deleting a mapping (or its LB) frees any `auto=true` allocation it
-  owns; manually allocated ports persist until explicitly returned.
+  owns; manually allocated ports persist until explicitly returned. **Replacing** a
+  mapping (`PUT`) that owned an `auto=true` allocation frees that allocation when
+  the replacement no longer references it (a fresh `allocate=true` mints a new one).
 - Listener ports are disjoint from the pool (§6), so proxy listeners never consume
   reservable application ports.
 - Allocations persist in `state.json` and survive restarts.
@@ -316,8 +346,9 @@ immutable snapshot published atomically (§16).
 ## 12. REST API
 
 Base: `https://<management_hostname>/api/v1` (or the management bind). Auth:
-`Authorization: Bearer <token>` on every endpoint except `/healthz`; bearer only
-(no cookies); constant-time compare; rate-limited.
+`Authorization: Bearer <token>` on every `/api/v1/*` endpoint; bearer only
+(no cookies); constant-time compare; rate-limited. The only unauthenticated
+surfaces are `/healthz` and the static login shell (no dynamic data).
 
 | Method & path | Purpose | Success |
 |---|---|---|
@@ -345,7 +376,10 @@ Mapping create/replace body:
 ```
 When `allocate` is `true`, omit `upstream.port`; the server allocates a port and
 sets the upstream to `http://localhost:<port>`. For `tls.mode = "ca"`, `ca_name`
-must reference an entry from `GET /cas`.
+must reference an entry from `GET /cas`. On `PUT`, a `listen_port` in the body (if
+present) must equal the path `{listen_port}` (else `400`); replacing a mapping that
+owned an `auto=true` port frees that allocation when the new mapping no longer uses
+it (§11).
 
 **Status codes:** `400` validation error, `401` bad/missing token, `404` unknown
 resource, `409` conflict (duplicate name, `(host, listen_port)` already mapped,
@@ -396,10 +430,11 @@ rgdevenv status
 Server-rendered (Go `html/template`) with a small amount of vanilla JavaScript
 that calls the REST API; all assets embedded via `embed.FS`. **No JS build step.**
 
-- **Auth (bearer-only):** a login screen accepts the token, stores it in
+- **Auth (bearer-only):** the **static login shell** (HTML/CSS/JS, no dynamic
+  data) loads **unauthenticated**; it accepts the token, stores it in
   `sessionStorage`, and sends it as the `Authorization` header on every API call.
-  Logout clears it. No cookies, so there is no CSRF surface; the API rejects
-  cookie auth.
+  All `/api/v1/*` data requires the bearer. Logout clears it. No cookies, so there
+  is no CSRF surface; the API rejects cookie auth.
 - **Header:** product name, run status, active listeners, version, logout.
 - **Load balancers** (left): each row shows the hostname as a quick-launch link
   built from the mapping's actual scheme + port (e.g.
@@ -419,16 +454,24 @@ All create/update/delete actions are available from the UI (full CRUD).
   `token_file`/`RGDEVENV_TOKEN`, ≥256-bit random, never logged, never written to
   `state.json`). Failed attempts per source IP are rate-limited (`429`). The
   hostname is **not** an access boundary — the token is; an optional
-  `management.bind` provides true network isolation (e.g. loopback + SSH tunnel)
-  when desired.
+  `management.bind` provides true network isolation. That bind is **plaintext on a
+  loopback address or unix socket only** (a non-loopback plaintext bind is refused
+  at startup); remote access is via an SSH tunnel, and the token is still required.
+  The static login shell loads unauthenticated; all data requires the bearer.
 - **Data plane is intentionally open**: anything that resolves a mapped hostname
   and reaches the host can hit that upstream. Exposure is bounded by `bind_addr`
   and the network.
 - **Upstream policy (SSRF/loop protection):** `localhost` is always allowed; any
   other upstream host must match `[upstreams].allow` (hostnames/CIDRs). Regardless
-  of the allowlist, requests to link-local (`169.254.0.0/16`), cloud-metadata
-  (`169.254.169.254`), and rgdevenv's own listener addresses are denied —
-  evaluated **after DNS resolution** so a name can't resolve around the rule.
+  of the allowlist, link-local (`169.254.0.0/16`), cloud-metadata
+  (`169.254.169.254`), and rgdevenv's own listener addresses are denied. This is
+  enforced by a single shared **safe dialer** used for both proxying and health
+  checks: it resolves the name, validates **all** returned IPv4/IPv6 addresses
+  against the deny rules, then dials a **pinned validated IP** with no
+  re-resolution — closing the DNS-rebinding window between check and connect. CIDRs
+  match by parsed IP; CNAMEs are followed to their final addresses; an upstream
+  resolving to multiple addresses is denied if **any** address is denied. Health
+  checks do **not** follow redirects to denied targets.
 - **Privilege:** prefer `CAP_NET_BIND_SERVICE` or systemd socket activation over
   running as root; if started as root to bind `:80`/`:443`, drop privileges
   afterward. The config/key/token files are `0600`.
@@ -440,7 +483,8 @@ All create/update/delete actions are available from the UI (full CRUD).
 **Staged mutation transaction** (every management change):
 1. **Build** a candidate snapshot from the live snapshot + the request.
 2. **Validate** semantically (canonical names, 0..N cardinality, `(host,port)` and
-   TLS-mode conflicts, pool disjointness, upstream policy, CA existence).
+   TLS-mode conflicts, pool disjointness incl. always-on/mgmt ports, PUT body/path
+   port match, upstream policy, path-safe CA existence).
 3. **Pre-bind** resources that can fail: open any new listener sockets, parse CA
    pools. On failure → abort, release partial resources, return an error.
 4. **Persist** the candidate atomically and durably (§10).
@@ -449,9 +493,13 @@ All create/update/delete actions are available from the UI (full CRUD).
 6. **Cleanup**: close now-unreferenced listeners; affected in-flight connections
    (incl. WebSockets) drain within a timeout, then close.
 
-A failure before step 5 leaves the running system unchanged. A crash between
-persist and publish is reconciled at startup (§10). All mutations are serialized;
-reads use the lock-free published snapshot.
+Pre-bind (step 3) acquires every resource that can fail, so **publish (step 5) is
+infallible** — a pointer swap plus handing already-bound listeners to their
+servers. The **commit point is successful persistence (step 4)**: the API returns
+success only after publish, a failure before step 5 leaves the running system
+unchanged, and a crash after persist but before publish is benign because startup
+loads the persisted (committed) state and re-derives runtime (§10). All mutations
+are serialized; reads use the lock-free published snapshot.
 
 **Data-plane errors:** unknown host → generic `404`; upstream
 unreachable/refused/timeout → generic `502`. Neither page exposes internal
@@ -512,12 +560,15 @@ code; boring over clever.
   malformed/newer-version handling, instance lock); config precedence; router
   matching incl. management hostname, reserved-name refusal, listener TLS-mode
   conflicts, pool-disjointness; upstream policy (localhost allowed, allowlist
-  enforced, link-local/metadata/self denied **after DNS resolution**).
+  enforced, link-local/metadata/self denied via the shared safe dialer;
+  **validated-IP pinning** defeats a DNS-rebinding upstream; multi-address
+  deny-if-any).
 - **Transaction:** pre-bind failure leaves state unchanged; persist failure rolls
   back; startup reconciliation after a simulated crash; degraded-mapping on
   unbindable port.
-- **API:** `net/http/httptest` over handlers — full CRUD incl. `PATCH`/`PUT`,
-  bearer-only auth (401), rate-limit (429), conflicts (409).
+- **API:** `net/http/httptest` over handlers — full CRUD incl. `PATCH`/`PUT`
+  (body/path port match), bearer-only auth (401) with the static login shell
+  reachable unauthenticated, rate-limit (429), conflicts (409).
 - **Proxy integration:** test upstreams (HTTP, and HTTPS with a self-signed CA in
   `ca_dir`) asserting routing, the three upstream TLS modes, forwarding-header
   overwrite (spoof attempt stripped), WebSocket upgrade, open-redirect prevention
@@ -573,3 +624,14 @@ code; boring over clever.
   optional isolated bind; upstreams localhost-by-default + allowlist with hard
   deny of link-local/metadata/self; custom CAs by name from a server-side
   `ca_dir`; UI auth bearer-only (no cookies/CSRF).
+- **2026-06-13 (post-Codex review #2):** tied SSRF/loop protection to a shared
+  **safe dialer** with **validated-IP pinning** (no re-resolution) for proxy +
+  health checks (§§8,15,19); defined the unauthenticated **static login shell** so
+  bearer-only can bootstrap (§§8,12,14); made cert/CA reload
+  **validate-before-swap / fail-closed** with CA errors degrade-not-downgrade
+  (§§7,10); defined **publish as infallible** with successful persist as the commit
+  point (§16). Decisions: the optional `management.bind` is **loopback/unix
+  plaintext** only (§§3,6,9,15); `ca` mode trusts the **named private CA only**
+  (not system roots) and `ca_name` must be path-safe (§§3,5,7). Also tightened PUT
+  body/path-port match, auto-allocation release on replace, and pool exclusion of
+  always-on/mgmt ports (§§6,9,10,11,12,16).
