@@ -7,6 +7,90 @@ import (
 	"time"
 )
 
+func validState() *State {
+	return &State{
+		Version: CurrentVersion,
+		LoadBalancers: []LoadBalancer{{
+			Name: "a.example.com",
+			Mappings: []Mapping{
+				{ListenPort: 443, ListenTLS: true, AllocationID: "alloc-1",
+					Upstream: Upstream{Scheme: "http", Host: "localhost", Port: 9011, TLS: UpstreamTLS{Mode: "verify"}}},
+			},
+		}},
+		PortAllocations: []PortAllocation{{ID: "alloc-1", Port: 9011}},
+	}
+}
+
+func TestValidateOK(t *testing.T) {
+	if err := Validate(validState()); err != nil {
+		t.Fatalf("valid state rejected: %v", err)
+	}
+}
+
+func TestValidateDuplicateLB(t *testing.T) {
+	st := validState()
+	st.LoadBalancers = append(st.LoadBalancers, LoadBalancer{Name: "a.example.com"})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected duplicate LB error")
+	}
+}
+
+func TestValidateTLSModeConflictAcrossLBs(t *testing.T) {
+	st := validState()
+	// Another LB reuses port 443 but as plaintext -> conflict.
+	st.LoadBalancers = append(st.LoadBalancers, LoadBalancer{
+		Name: "b.example.com",
+		Mappings: []Mapping{{ListenPort: 443, ListenTLS: false,
+			Upstream: Upstream{Scheme: "http", Host: "localhost", Port: 9012, TLS: UpstreamTLS{Mode: "verify"}}}},
+	})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected TLS-mode conflict on port 443")
+	}
+}
+
+func TestValidateDanglingAllocation(t *testing.T) {
+	st := validState()
+	st.LoadBalancers[0].Mappings[0].AllocationID = "ghost"
+	if err := Validate(st); err == nil {
+		t.Fatal("expected dangling allocation error")
+	}
+}
+
+func TestValidateDuplicateAllocationPort(t *testing.T) {
+	st := validState()
+	st.PortAllocations = append(st.PortAllocations, PortAllocation{ID: "alloc-2", Port: 9011})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected duplicate allocation port error")
+	}
+}
+
+func TestValidateEmptyLBName(t *testing.T) {
+	st := validState()
+	st.LoadBalancers = append(st.LoadBalancers, LoadBalancer{Name: ""})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected empty LB name error")
+	}
+}
+
+func TestValidateDuplicateAllocationID(t *testing.T) {
+	st := validState()
+	st.PortAllocations = append(st.PortAllocations, PortAllocation{ID: "alloc-1", Port: 9999})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected duplicate allocation id error")
+	}
+}
+
+func TestValidateDuplicateListenPortWithinLB(t *testing.T) {
+	st := validState()
+	st.LoadBalancers[0].Mappings = append(st.LoadBalancers[0].Mappings, Mapping{
+		ListenPort: 443, ListenTLS: true,
+		Upstream: Upstream{Scheme: "http", Host: "localhost", Port: 9099, TLS: UpstreamTLS{Mode: "verify"}},
+	})
+	if err := Validate(st); err == nil {
+		t.Fatal("expected duplicate listen_port within LB error")
+	}
+}
+
 func TestStateJSONRoundTrip(t *testing.T) {
 	in := &State{
 		Version: CurrentVersion,
