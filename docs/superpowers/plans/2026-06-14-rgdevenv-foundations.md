@@ -33,6 +33,38 @@ Spec section references (e.g. *§8*) point into the design spec above.
 
 ---
 
+## Post-execution revisions
+
+This plan was executed via subagent-driven development with per-task spec + code-quality
+review. The following deviations from the task text above were made during execution
+(the committed code is the source of truth):
+
+- **Dependencies / `go` version.** `golang.org/x/net@latest` requires `go 1.25`, which
+  conflicts with the spec's `go 1.22` minimum. Pinned `x/net v0.21.0` (added in Task 2 on
+  first import) and `BurntSushi/toml v1.3.2` (added in Task 3 on first import); `x/text`
+  pulled transitively at `v0.14.0`. Task 1 fetches only `cobra` up front. `go.mod` stays at
+  `go 1.22`.
+- **`canon.Host` (Task 2)** also rejects the root label, empty labels (`..`), and **all IP
+  literals** (IPv4 and IPv6) — an IP is not a valid hostname (§5).
+- **`config.applyEnv` (Task 3)** returns an error and fails loudly on a non-integer port env
+  var (no silent drop). The precedence test uses an env port outside the pool (the plan's
+  `9443` was inside the default pool and would be correctly rejected by `normalize`).
+- **`proxy.Listeners.Reconcile` (Task 16)** uses map **key-presence** checks
+  (`_, ok := desired[port]`) for the keep/close and always-on decisions — the plan's boolean
+  *value* lookups were a bug (a `false`/plaintext port would be opened then immediately
+  closed). Removed listeners are also drained **outside** the lock.
+- **Tooling.** `.golangci.yml` updated to golangci-lint **v2** format (`govet` + `staticcheck`;
+  the broader set was noisy on intentional `defer Close()`/`defer os.Remove()` patterns).
+- Many tasks gained **additional review-driven tests** beyond the plan's minimum (SNI
+  selection, dialer fallback/resolve-error, router degrade/`WithoutPorts`, `Apply`
+  bind-failure, body-size limit, mgmt-bind pool exclusion, etc.).
+
+**Deferred to Phase 2** (noted by the final review, not bugs): an overall max-duration cap on
+upgraded/streaming connections (§8), and a default request-body-size limit (the mechanism is
+wired and tested; the default is `0`/unlimited, which suits a dev proxy that handles uploads).
+
+---
+
 ## File structure (Phase 1)
 
 ```
