@@ -34,6 +34,7 @@ type Server struct {
 
 	routes    atomic.Pointer[RoutingTable]
 	listeners *Listeners
+	mgmt      atomic.Pointer[http.Handler] // optional management-plane handler (Phase 2)
 }
 
 // NewServer constructs a Server; the HTTPS/on-demand TLS listeners use
@@ -54,6 +55,13 @@ func NewServer(cfg ServerConfig, policy *upstream.Policy, resolver *CertResolver
 	}
 	s.routes.Store(&RoutingTable{routes: map[int]map[string]*route{}, hosts: map[string]bool{}})
 	return s
+}
+
+// SetManagementHandler installs the handler served at the management hostname
+// (and on the optional management bind). Set it before serving; it is read
+// race-free per request. A nil/unset handler makes the management host 404.
+func (s *Server) SetManagementHandler(h http.Handler) {
+	s.mgmt.Store(&h)
 }
 
 // Apply rebuilds routing + listeners from st and publishes atomically. Returns
@@ -106,9 +114,13 @@ func (s *Server) dispatch(port int) http.Handler {
 			writeNotFound(w)
 			return
 		}
-		// AIDEV-TODO(phase2): when host == s.cfg.MgmtHost, serve the management
-		// plane here (auth + REST API + web UI). For now it 404s like any host.
+		// Management hostname → the injected management handler (auth + REST API
+		// + UI). If none is installed, 404 like any unknown host (§6).
 		if s.cfg.MgmtHost != "" && host == s.cfg.MgmtHost {
+			if hp := s.mgmt.Load(); hp != nil {
+				(*hp).ServeHTTP(w, r)
+				return
+			}
 			writeNotFound(w)
 			return
 		}

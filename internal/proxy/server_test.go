@@ -154,3 +154,21 @@ func TestDispatchEnforcesBodyLimit(t *testing.T) {
 		t.Fatalf("oversized body should be rejected, got 200")
 	}
 }
+
+func TestDispatchServesManagementHandler(t *testing.T) {
+	certFile, keyFile := writeWildcardCert(t)
+	s := newTestServer(t, certFile, keyFile, "rgdevenv.sean.realgo.com")
+	s.SetManagementHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "mgmt")
+	}))
+
+	req := httptest.NewRequest("GET", "https://rgdevenv.sean.realgo.com/api/v1/status", nil)
+	req.Host = "rgdevenv.sean.realgo.com"
+	w := httptest.NewRecorder()
+	s.dispatch(443).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK || w.Body.String() != "mgmt" {
+		t.Fatalf("management handler not served: code=%d body=%q", w.Code, w.Body.String())
+	}
+}
