@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const goodToken = "0123456789abcdef0123456789abcdef" // 32 chars >= 256-bit
@@ -72,5 +73,29 @@ func TestParseBearer(t *testing.T) {
 	}
 	if _, ok := ParseBearer(""); ok {
 		t.Fatal("ParseBearer should reject empty")
+	}
+}
+
+func TestRateLimiterBlocksAfterLimit(t *testing.T) {
+	rl := NewRateLimiter(2, time.Minute)
+	now := time.Unix(1_000_000, 0)
+	rl.now = func() time.Time { return now }
+
+	if !rl.Allowed("1.2.3.4") {
+		t.Fatal("first request should be allowed")
+	}
+	rl.RecordFailure("1.2.3.4")
+	rl.RecordFailure("1.2.3.4")
+	if rl.Allowed("1.2.3.4") {
+		t.Fatal("should be blocked after 2 failures")
+	}
+	// A different IP is unaffected.
+	if !rl.Allowed("5.6.7.8") {
+		t.Fatal("other IP should be allowed")
+	}
+	// After the window passes, the IP is allowed again.
+	now = now.Add(2 * time.Minute)
+	if !rl.Allowed("1.2.3.4") {
+		t.Fatal("should be allowed after the window elapses")
 	}
 }
