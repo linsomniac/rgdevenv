@@ -125,7 +125,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error) {
 func decodeJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		return txn.Validation("bad_json", "invalid request body: "+err.Error())
 	}
 	return nil

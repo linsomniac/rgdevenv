@@ -34,6 +34,13 @@ func TestPortAllocateListReturn(t *testing.T) {
 	}
 }
 
+func TestAllocatePortEmptyBody(t *testing.T) {
+	h := newAPITestHandler(t)
+	if w := do(h, authReq("POST", "/api/v1/ports/allocate", "")); w.Code != http.StatusCreated {
+		t.Fatalf("empty-body allocate: code=%d body=%s", w.Code, w.Body)
+	}
+}
+
 func TestReturnPortInUse(t *testing.T) {
 	h := newAPITestHandler(t)
 	mustCreateLB(t, h, "rg-1.sean.realgo.com")
