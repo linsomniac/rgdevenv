@@ -70,3 +70,23 @@ func TestLoadCA(t *testing.T) {
 		t.Fatal("expected error for path traversal")
 	}
 }
+
+func TestListCAs(t *testing.T) {
+	dir := writeTestCAPEM(t, "corp") // helper already in ca_test.go
+	if err := os.WriteFile(filepath.Join(dir, "build-box.pem"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	names, err := ListCAs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "build-box" || names[1] != "corp" {
+		t.Fatalf("ListCAs = %v, want sorted [build-box corp]", names)
+	}
+	if n, err := ListCAs(filepath.Join(dir, "nope")); err != nil || n != nil {
+		t.Fatalf("missing dir: %v %v", n, err)
+	}
+}

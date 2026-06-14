@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -22,6 +23,29 @@ func ValidCAName(name string) bool {
 		return false
 	}
 	return caNameRe.MatchString(name)
+}
+
+// ListCAs returns the sorted names of *.pem CA files in caDir (extension
+// stripped). A missing directory yields nil with no error (§12 GET /cas).
+func ListCAs(caDir string) ([]string, error) {
+	entries, err := os.ReadDir(caDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if n := e.Name(); strings.HasSuffix(n, ".pem") {
+			names = append(names, strings.TrimSuffix(n, ".pem"))
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // LoadCA loads the named private CA into a fresh pool that trusts ONLY this CA

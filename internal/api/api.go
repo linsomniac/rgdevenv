@@ -71,6 +71,8 @@ func (h *Handler) buildMux() http.Handler {
 	// middleware below covers every one of them.
 	h.registerLBRoutes(api)
 	h.registerMappingRoutes(api)
+	h.registerPortRoutes(api)
+	h.registerMiscRoutes(api)
 	// <register-api-routes>
 
 	mux.Handle("/api/v1/", h.authMiddleware(api))
