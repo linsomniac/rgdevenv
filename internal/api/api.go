@@ -69,6 +69,7 @@ func (h *Handler) buildMux() http.Handler {
 	// AIDEV-NOTE: route registration is added by later tasks (lbs, mappings,
 	// ports, cas, status). Keep all /api/v1/* routes on THIS sub-mux so the auth
 	// middleware below covers every one of them.
+	h.registerLBRoutes(api)
 	// <register-api-routes>
 
 	mux.Handle("/api/v1/", h.authMiddleware(api))
