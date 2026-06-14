@@ -70,6 +70,7 @@ func (h *Handler) buildMux() http.Handler {
 	// ports, cas, status). Keep all /api/v1/* routes on THIS sub-mux so the auth
 	// middleware below covers every one of them.
 	h.registerLBRoutes(api)
+	h.registerMappingRoutes(api)
 	// <register-api-routes>
 
 	mux.Handle("/api/v1/", h.authMiddleware(api))
