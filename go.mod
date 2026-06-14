@@ -3,6 +3,7 @@ module github.com/realgo/rgdevenv
 go 1.22
 
 require (
+	github.com/BurntSushi/toml v1.3.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/net v0.21.0
 )
