@@ -33,6 +33,32 @@ Spec section references (e.g. *§12*) point into the design spec.
 - `proxy`: `Server` (`NewServer`, `Apply(*store.State) []Degraded`, `Shutdown`, `Resolver() *CertResolver`), `CertResolver.Covers(string) bool`, `Degraded`, `DefaultLimits`.
 - `cmd/rgdevenv`: `serve.go` with `runServe`, `setupServer(cfg,*slog.Logger) (*proxy.Server, *store.Store, error)`, `runSignals`.
 
+## Post-execution revisions
+
+Executed via subagent-driven development with per-task spec + code-quality review.
+Deviations from the task text above (the committed code is the source of truth):
+
+- **`decodeJSON` tolerates an empty body** (`io.EOF` → empty object) so optional-body
+  POSTs like `/ports/allocate` succeed with no body; required-field checks still run.
+- **`txn.Validate` also range-checks** `listen_port` and `upstream.port` (1–65535),
+  beyond the plan's rules.
+- **`api.writeErr` logs any 5xx** (covers a future unmapped `txn.Error` kind, not
+  only non-txn errors).
+- **`api.listCAs` returns a generic error** ("CA directory is unavailable") and logs
+  the detail, rather than echoing the OS error (which contained the CA-dir path).
+- **serve shutdown drains the management bind concurrently** with the proxy (so a
+  wedged bind can't starve the 30s drain); the management-bind `http.Server` also
+  sets `IdleTimeout`/`MaxHeaderBytes`.
+- Many tasks gained **extra review-driven tests** (PATCH/DELETE-missing → 404,
+  good-token-from-rate-limited-IP → 429, replace+allocate cascade, port-range,
+  invalid-tls-mode, mgmt-bind-port conflict, empty-body allocate, etc.).
+
+**Note for Phase 2b:** `GET /lbs` and `GET /status` currently OMIT per-mapping health
+fields (the plan said they'd report `"unknown"`); Phase 2b adds real health, so the
+2b author should introduce the `health` field on those responses then.
+
+---
+
 ## File structure (Phase 2a)
 
 ```
