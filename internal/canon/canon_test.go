@@ -17,6 +17,11 @@ func TestHost(t *testing.T) {
 		{"empty", "", "", true},
 		{"whitespace only", "   ", "", true},
 		{"space inside", "bad host", "", true},
+		{"root dot only", ".", "", true},
+		{"double dot", "..", "", true},
+		{"empty label", "host..example.com", "", true},
+		{"ipv6 literal with port", "[::1]:443", "", true},
+		{"ipv6 literal bare", "[::1]", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

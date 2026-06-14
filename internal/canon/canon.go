@@ -32,6 +32,9 @@ func Host(s string) (string, error) {
 	if h == "" {
 		return "", fmt.Errorf("canon: empty host after normalization")
 	}
+	if h == "." || strings.Contains(h, "..") {
+		return "", fmt.Errorf("canon: malformed host %q", s)
+	}
 	ascii, err := idna.Lookup.ToASCII(h)
 	if err != nil {
 		return "", fmt.Errorf("canon: %q: %w", s, err)
