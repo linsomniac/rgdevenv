@@ -35,6 +35,9 @@ func Host(s string) (string, error) {
 	if h == "." || strings.Contains(h, "..") {
 		return "", fmt.Errorf("canon: malformed host %q", s)
 	}
+	if net.ParseIP(h) != nil {
+		return "", fmt.Errorf("canon: IP literal %q is not a valid hostname", s)
+	}
 	ascii, err := idna.Lookup.ToASCII(h)
 	if err != nil {
 		return "", fmt.Errorf("canon: %q: %w", s, err)

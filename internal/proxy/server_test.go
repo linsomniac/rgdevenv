@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,5 +116,41 @@ func TestApplyDegradesOnListenerBindFailure(t *testing.T) {
 	}
 	if _, ok := s.routes.Load().Lookup(busyPort, "rg-busy.sean.realgo.com"); ok {
 		t.Fatal("bind-failed mapping must not be routable")
+	}
+}
+
+func TestDispatchEnforcesBodyLimit(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(200)
+	}))
+	defer backend.Close()
+	host, port := backendHostPort(t, backend.URL)
+
+	certFile, keyFile := writeWildcardCert(t)
+	resolver, err := NewCertResolver([]config.CertPair{{CertFile: certFile, KeyFile: keyFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultLimits()
+	limits.MaxRequestBody = 16 // tiny cap
+	s := NewServer(ServerConfig{BindAddr: "127.0.0.1", HTTPSPort: 443, HTTPPort: 80, DialTimeout: time.Second},
+		upstream.NewPolicy(nil), resolver, limits, discardLogger())
+	dialer := upstream.New(upstream.NewPolicy(nil), upstream.SelfGuard{}, time.Second)
+	tbl, _ := BuildRoutingTable(&store.State{LoadBalancers: []store.LoadBalancer{{
+		Name: "rg-1.sean.realgo.com",
+		Mappings: []store.Mapping{{ListenPort: 443, ListenTLS: true,
+			Upstream: store.Upstream{Scheme: "http", Host: host, Port: port, TLS: store.UpstreamTLS{Mode: "verify"}}}},
+	}}}, RouteDeps{Dialer: dialer, Resolver: resolver, Limits: limits, Logger: discardLogger()})
+	s.routes.Store(tbl)
+
+	req := httptest.NewRequest("POST", "https://rg-1.sean.realgo.com/", strings.NewReader(strings.Repeat("x", 1000)))
+	req.Host = "rg-1.sean.realgo.com"
+	w := httptest.NewRecorder()
+	s.dispatch(443).ServeHTTP(w, req)
+
+	// The oversized body must NOT be successfully proxied (limit enforced).
+	if w.Code == http.StatusOK {
+		t.Fatalf("oversized body should be rejected, got 200")
 	}
 }

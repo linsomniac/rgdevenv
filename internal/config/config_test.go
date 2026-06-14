@@ -88,3 +88,10 @@ func TestLoadRejectsBadEnvPort(t *testing.T) {
 		t.Fatal("expected error for non-integer RGDEVENV_HTTPS_PORT")
 	}
 }
+
+func TestNormalizeRejectsMgmtBindPortInPool(t *testing.T) {
+	path := writeTOML(t, "[management]\nbind = \"127.0.0.1:9500\"\n[port_pool]\nstart = 9000\nend = 9999\n")
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error: management bind port inside pool")
+	}
+}
