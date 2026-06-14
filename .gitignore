@@ -1,1 +1,4 @@
 .superpowers/
+
+# Built binary (produced by `go build ./cmd/rgdevenv`)
+/rgdevenv
