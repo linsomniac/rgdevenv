@@ -142,6 +142,9 @@ func (s *Server) Shutdown(ctx context.Context) error { return s.listeners.Shutdo
 // Resolver exposes the cert resolver (for SIGHUP reload wiring).
 func (s *Server) Resolver() *CertResolver { return s.resolver }
 
+// ActivePorts returns the currently bound listener ports (for /status).
+func (s *Server) ActivePorts() []int { return s.listeners.ActivePorts() }
+
 func allListenPorts(st *store.State, httpsPort, httpPort int) map[int]bool {
 	ports := map[int]bool{httpsPort: true}
 	if httpPort > 0 {

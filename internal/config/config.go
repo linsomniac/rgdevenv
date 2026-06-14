@@ -215,6 +215,15 @@ func (c *Config) mgmtBindPort() (int, bool) {
 	return p, true
 }
 
+// MgmtBindPort returns the TCP port of management.bind, or 0 for none/unix.
+func (c *Config) MgmtBindPort() int {
+	p, ok := c.mgmtBindPort()
+	if !ok {
+		return 0
+	}
+	return p
+}
+
 // AllCertPairs returns the primary (top-level) pair first, then any extras.
 func (c *Config) AllCertPairs() []CertPair {
 	var pairs []CertPair

@@ -4,19 +4,28 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/realgo/rgdevenv/internal/api"
+	"github.com/realgo/rgdevenv/internal/auth"
 	"github.com/realgo/rgdevenv/internal/config"
 	"github.com/realgo/rgdevenv/internal/proxy"
 	"github.com/realgo/rgdevenv/internal/registry"
 	"github.com/realgo/rgdevenv/internal/store"
+	"github.com/realgo/rgdevenv/internal/txn"
 	"github.com/realgo/rgdevenv/internal/upstream"
 )
+
+const version = "0.1.0"
 
 func newServeCmd() *cobra.Command {
 	var configPath string
@@ -38,7 +47,7 @@ func runServe(configPath string) error {
 	}
 	logger, levelVar := newLogger(cfg.Log.Level)
 
-	srv, st, err := setupServer(cfg, logger)
+	srv, st, mgmtHandler, err := setupServer(cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -47,28 +56,38 @@ func runServe(configPath string) error {
 	for _, d := range srv.Apply(st.Snapshot()) {
 		logger.Warn("mapping degraded", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
 	}
-	logger.Info("rgdevenv listening", "https_port", cfg.HTTPSPort, "http_port", cfg.HTTPPort, "bind", cfg.BindAddr)
 
-	return runSignals(configPath, srv, st, logger, levelVar)
+	var mgmtBind *http.Server
+	if cfg.Management.Bind != "" {
+		mgmtBind, err = startMgmtBind(cfg.Management.Bind, mgmtHandler, proxy.DefaultLimits(), logger)
+		if err != nil {
+			return err
+		}
+	}
+
+	logger.Info("rgdevenv listening", "https_port", cfg.HTTPSPort, "http_port", cfg.HTTPPort, "bind", cfg.BindAddr)
+	return runSignals(configPath, srv, st, mgmtBind, logger, levelVar)
 }
 
-// setupServer opens + validates + reconciles the store and builds the proxy
-// server. It does NOT bind sockets (call srv.Apply for that), so it is testable.
-func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store.Store, error) {
+// setupServer opens + validates + reconciles the store, builds the proxy server,
+// and installs the management plane (auth + transaction + REST API) at the
+// MgmtHost seam. It does NOT bind sockets (call srv.Apply); it returns the
+// management handler so the caller can also serve it on the optional bind.
+func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store.Store, http.Handler, error) {
 	st, err := store.Open(cfg.StateFile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	snap := st.Snapshot()
 	if err := store.Validate(snap); err != nil {
 		st.Close()
-		return nil, nil, fmt.Errorf("state invalid: %w", err)
+		return nil, nil, nil, fmt.Errorf("state invalid: %w", err)
 	}
 	if allocs, changed := registry.Reconcile(snap); changed {
 		snap.PortAllocations = allocs
 		if err := st.Save(snap); err != nil {
 			st.Close()
-			return nil, nil, fmt.Errorf("persist reconciled state: %w", err)
+			return nil, nil, nil, fmt.Errorf("persist reconciled state: %w", err)
 		}
 		st.Publish(snap)
 		logger.Info("reconciled orphaned port allocations")
@@ -77,7 +96,7 @@ func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store
 	resolver, err := proxy.NewCertResolver(cfg.AllCertPairs())
 	if err != nil {
 		st.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	limits := proxy.DefaultLimits()
@@ -89,19 +108,77 @@ func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store
 		MgmtHost:    cfg.ManagementHostname,
 		DialTimeout: limits.DialTimeout,
 	}, upstream.NewPolicy(cfg.Upstreams.Allow), resolver, limits, logger)
-	return srv, st, nil
+
+	token, err := auth.LoadToken(cfg.TokenFile)
+	if err != nil {
+		st.Close()
+		return nil, nil, nil, err
+	}
+	mgr := txn.New(st, func(state *store.State) {
+		for _, d := range srv.Apply(state) {
+			logger.Warn("mapping degraded", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
+		}
+	}, resolver.Covers, upstream.NewPolicy(cfg.Upstreams.Allow), txn.Config{
+		PoolStart:    cfg.PortPool.Start,
+		PoolEnd:      cfg.PortPool.End,
+		HTTPSPort:    cfg.HTTPSPort,
+		HTTPPort:     cfg.HTTPPort,
+		MgmtBindPort: cfg.MgmtBindPort(),
+		MgmtHost:     cfg.ManagementHostname,
+		CADir:        cfg.CADir,
+	})
+	mgmtHandler := api.New(api.Deps{
+		Txn:         mgr,
+		Auth:        auth.NewAuthenticator(token),
+		Limiter:     auth.NewRateLimiter(cfg.Management.AuthRateLimitPerMin, time.Minute),
+		CADir:       cfg.CADir,
+		Version:     version,
+		HTTPSPort:   cfg.HTTPSPort,
+		HTTPPort:    cfg.HTTPPort,
+		PoolStart:   cfg.PortPool.Start,
+		PoolEnd:     cfg.PortPool.End,
+		ActivePorts: srv.ActivePorts,
+		Logger:      logger,
+	})
+	srv.SetManagementHandler(mgmtHandler)
+	return srv, st, mgmtHandler, nil
+}
+
+// startMgmtBind serves the management handler on a separate plaintext listener
+// (loopback TCP or unix socket; validated by config) (§15).
+func startMgmtBind(bind string, h http.Handler, limits proxy.Limits, logger *slog.Logger) (*http.Server, error) {
+	network, addr := "tcp", bind
+	if strings.HasPrefix(bind, "/") || strings.HasPrefix(bind, "@") || strings.HasPrefix(bind, "unix:") {
+		network = "unix"
+		addr = strings.TrimPrefix(bind, "unix:")
+	}
+	ln, err := net.Listen(network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("management bind %q: %w", bind, err)
+	}
+	srv := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: limits.ReadHeaderTimeout,
+		IdleTimeout:       limits.IdleTimeout,
+		MaxHeaderBytes:    limits.MaxHeaderBytes,
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logger.Error("management bind stopped", "error", err)
+		}
+	}()
+	logger.Info("management plane on separate bind", "bind", bind)
+	return srv, nil
 }
 
 // runSignals blocks until SIGTERM/SIGINT, handling SIGHUP reloads in between.
-func runSignals(configPath string, srv *proxy.Server, st *store.Store, logger *slog.Logger, levelVar *slog.LevelVar) error {
+func runSignals(configPath string, srv *proxy.Server, st *store.Store, mgmtBind *http.Server, logger *slog.Logger, levelVar *slog.LevelVar) error {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
 	for sig := range sigs {
 		switch sig {
 		case syscall.SIGHUP:
-			// Runtime-safe reload only: log level, certs, CA file contents.
-			// Ports/bind changes require a restart (§9).
 			newCfg, err := config.Load(configPath)
 			if err != nil {
 				logger.Error("config reload failed; keeping previous config", "error", err)
@@ -121,7 +198,13 @@ func runSignals(configPath string, srv *proxy.Server, st *store.Store, logger *s
 		case syscall.SIGTERM, syscall.SIGINT:
 			logger.Info("shutting down")
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			var wg sync.WaitGroup
+			if mgmtBind != nil {
+				wg.Add(1)
+				go func() { defer wg.Done(); _ = mgmtBind.Shutdown(ctx) }()
+			}
 			err := srv.Shutdown(ctx)
+			wg.Wait()
 			cancel()
 			return err
 		}

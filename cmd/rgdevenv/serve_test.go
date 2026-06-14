@@ -83,6 +83,9 @@ func writeMainTestCert(t *testing.T) (certFile, keyFile string) {
 }
 
 func TestSetupServerWiring(t *testing.T) {
+	const mgmtToken = "0123456789abcdef0123456789abcdef"
+	t.Setenv("RGDEVENV_TOKEN", mgmtToken)
+
 	certFile, keyFile := writeMainTestCert(t)
 	httpsPort := freeTCPPort(t)
 	cfg := &config.Config{
@@ -96,7 +99,7 @@ func TestSetupServerWiring(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv, st, err := setupServer(cfg, logger)
+	srv, st, _, err := setupServer(cfg, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,5 +126,28 @@ func TestSetupServerWiring(t *testing.T) {
 	// TLS handshake proves the cert loaded + listener bound; mgmt host 404s in phase 1.
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+
+	mgmtGet := func(path, token string) int {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("https://127.0.0.1:%d%s", httpsPort, path), nil)
+		req.Host = "rgdevenv.sean.realgo.com"
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := mgmtGet("/healthz", ""); code != http.StatusOK {
+		t.Fatalf("mgmt /healthz = %d, want 200", code)
+	}
+	if code := mgmtGet("/api/v1/status", ""); code != http.StatusUnauthorized {
+		t.Fatalf("mgmt /api/v1/status without token = %d, want 401", code)
+	}
+	if code := mgmtGet("/api/v1/status", mgmtToken); code != http.StatusOK {
+		t.Fatalf("mgmt /api/v1/status with token = %d, want 200", code)
 	}
 }
