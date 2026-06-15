@@ -139,6 +139,8 @@ func (t *Tracker) record(id Identity, healthy bool) {
 
 // RecordFailure feeds a single unhealthy sample for up's identity (the live
 // proxy-failure feed, §17). Subject to the same hysteresis as active probes.
+// If the identity is not in the current probe set, the state is auto-seeded and
+// will be pruned by the next SetTargets call that omits it.
 func (t *Tracker) RecordFailure(up store.Upstream) { t.record(IdentityOf(up), false) }
 
 // Run probes all targets every interval until ctx is cancelled. A disabled

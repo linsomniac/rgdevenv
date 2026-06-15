@@ -37,7 +37,11 @@ type Server struct {
 	mgmt      atomic.Pointer[http.Handler]    // optional management-plane handler (Phase 2)
 	dialer    atomic.Pointer[upstream.Dialer] // the safe dialer from the latest Apply (shared with the health checker)
 
-	onUpstreamErr func(store.Upstream) // set once before serving (SetUpstreamErrorObserver)
+	// AIDEV-NOTE: onUpstreamErr is a plain field by contract — set ONCE via
+	// SetUpstreamErrorObserver before serving, then only READ (copied into
+	// RouteDeps) by Apply. It is never mutated after serving begins, so no atomic
+	// is needed; do NOT call SetUpstreamErrorObserver after the server is serving.
+	onUpstreamErr func(store.Upstream)
 }
 
 // NewServer constructs a Server; the HTTPS/on-demand TLS listeners use
