@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"sync"
@@ -130,5 +131,44 @@ func (t *Tracker) record(id Identity, healthy bool) {
 	}
 	if s.status != desired && s.streak >= t.cfg.Threshold {
 		s.status = desired
+	}
+}
+
+// Run probes all targets every interval until ctx is cancelled. A disabled
+// tracker returns immediately. The first round runs eagerly (no initial delay).
+func (t *Tracker) Run(ctx context.Context) {
+	if !t.cfg.Enabled {
+		return
+	}
+	interval := t.cfg.Interval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	t.checkOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.checkOnce(ctx)
+		}
+	}
+}
+
+// checkOnce probes every current target once and records the result.
+func (t *Tracker) checkOnce(ctx context.Context) {
+	var targets []Identity
+	if p := t.targets.Load(); p != nil {
+		targets = *p
+	}
+	for _, id := range targets {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		t.record(id, t.probe(ctx, id))
 	}
 }

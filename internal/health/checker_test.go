@@ -1,7 +1,11 @@
 package health
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/realgo/rgdevenv/internal/store"
 )
@@ -61,5 +65,43 @@ func TestNewBumpsZeroThreshold(t *testing.T) {
 	tr.record(IdentityOf(u), true)
 	if tr.Status(u) != Up {
 		t.Fatal("threshold 0 must be treated as 1 (one sample flips)")
+	}
+}
+
+func TestCheckOnceDrivesStatus(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer ok.Close()
+	h, p := hostPort(t, ok.URL)
+	u := store.Upstream{Scheme: "http", Host: h, Port: p}
+
+	tr := New(Config{Enabled: true, Path: "/", Timeout: 2 * time.Second, Threshold: 2}, "", nil)
+	tr.SetDialer(testDialer())
+	tr.SetTargets([]Identity{IdentityOf(u)})
+
+	tr.checkOnce(context.Background())
+	if tr.Status(u) != Unknown {
+		t.Fatalf("one round, threshold 2 → unknown, got %s", tr.Status(u))
+	}
+	tr.checkOnce(context.Background())
+	if tr.Status(u) != Up {
+		t.Fatalf("two rounds → up, got %s", tr.Status(u))
+	}
+}
+
+func TestRunReturnsWhenDisabled(t *testing.T) {
+	New(Config{Enabled: false}, "", nil).Run(context.Background()) // must return immediately
+}
+
+func TestRunStopsOnContextCancel(t *testing.T) {
+	tr := New(Config{Enabled: true, Interval: time.Hour, Path: "", Timeout: time.Second}, "", nil)
+	tr.SetDialer(testDialer())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() { tr.Run(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop on context cancel")
 	}
 }
