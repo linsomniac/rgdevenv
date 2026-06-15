@@ -172,3 +172,22 @@ func TestDispatchServesManagementHandler(t *testing.T) {
 		t.Fatalf("management handler not served: code=%d body=%q", w.Code, w.Body.String())
 	}
 }
+
+func TestServerDialerSetAfterApply(t *testing.T) {
+	certFile, keyFile := writeWildcardCert(t)
+	resolver, err := NewCertResolver([]config.CertPair{{CertFile: certFile, KeyFile: keyFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(ServerConfig{BindAddr: "127.0.0.1", HTTPSPort: freePort(t), HTTPPort: 0, DialTimeout: time.Second},
+		upstream.NewPolicy(nil), resolver, DefaultLimits(), discardLogger())
+	defer s.Shutdown(context.Background())
+
+	if s.Dialer() != nil {
+		t.Fatal("dialer must be nil before Apply")
+	}
+	s.Apply(&store.State{})
+	if s.Dialer() == nil {
+		t.Fatal("dialer must be set after Apply")
+	}
+}

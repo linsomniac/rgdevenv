@@ -34,7 +34,8 @@ type Server struct {
 
 	routes    atomic.Pointer[RoutingTable]
 	listeners *Listeners
-	mgmt      atomic.Pointer[http.Handler] // optional management-plane handler (Phase 2)
+	mgmt      atomic.Pointer[http.Handler]    // optional management-plane handler (Phase 2)
+	dialer    atomic.Pointer[upstream.Dialer] // the safe dialer from the latest Apply (shared with the health checker)
 }
 
 // NewServer constructs a Server; the HTTPS/on-demand TLS listeners use
@@ -73,6 +74,7 @@ func (s *Server) SetManagementHandler(h http.Handler) {
 func (s *Server) Apply(st *store.State) []Degraded {
 	selfPorts := allListenPorts(st, s.cfg.HTTPSPort, s.cfg.HTTPPort)
 	dialer := upstream.New(s.policy, upstream.SelfGuard{LocalIPs: s.localIPs, ListenPorts: selfPorts}, s.cfg.DialTimeout)
+	s.dialer.Store(dialer)
 
 	table, degraded := BuildRoutingTable(st, RouteDeps{
 		Dialer:   dialer,
@@ -144,6 +146,11 @@ func (s *Server) Resolver() *CertResolver { return s.resolver }
 
 // ActivePorts returns the currently bound listener ports (for /status).
 func (s *Server) ActivePorts() []int { return s.listeners.ActivePorts() }
+
+// Dialer returns the safe dialer from the most recent Apply (nil before the first
+// Apply). The health checker probes through this exact instance so proxy and
+// health share one SSRF/loop policy + self-guard (§8, §15).
+func (s *Server) Dialer() *upstream.Dialer { return s.dialer.Load() }
 
 func allListenPorts(st *store.State, httpsPort, httpPort int) map[int]bool {
 	ports := map[int]bool{httpsPort: true}
