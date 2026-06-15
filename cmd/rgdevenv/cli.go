@@ -82,3 +82,18 @@ func writeRow(w io.Writer, cols []string) {
 	}
 	fmt.Fprintln(w)
 }
+
+// newRoot builds the root command with all subcommands and client flags. main()
+// and tests both use it so the wiring is identical.
+func newRoot() *cobra.Command {
+	root := &cobra.Command{
+		Use:           "rgdevenv",
+		Short:         "HTTPS reverse proxy for managing dev environments",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	addClientFlags(root)
+	root.AddCommand(newServeCmd())
+	root.AddCommand(newLBCmd(), newMapCmd(), newPortCmd(), newCACmd(), newStatusCmd())
+	return root
+}

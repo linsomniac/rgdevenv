@@ -6,22 +6,10 @@ package main
 import (
 	"fmt"
 	"os"
-
-	"github.com/spf13/cobra"
 )
 
 func main() {
-	root := &cobra.Command{
-		Use:           "rgdevenv",
-		Short:         "HTTPS reverse proxy for managing dev environments",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-	}
-	addClientFlags(root)
-	root.AddCommand(newServeCmd())
-	root.AddCommand(newLBCmd(), newMapCmd(), newPortCmd(), newCACmd(), newStatusCmd())
-
-	if err := root.Execute(); err != nil {
+	if err := newRoot().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "rgdevenv: error:", err)
 		os.Exit(1)
 	}

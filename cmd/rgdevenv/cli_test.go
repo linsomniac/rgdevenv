@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestRenderJSON(t *testing.T) {
@@ -28,4 +30,12 @@ func TestRenderTable(t *testing.T) {
 	if lines := strings.Count(strings.TrimRight(out, "\n"), "\n"); lines != 2 {
 		t.Fatalf("want 3 lines (header+2 rows), got %d in %q", lines+1, out)
 	}
+}
+
+// AIDEV-NOTE: the CLI flag values live in the package-global `cli` (cobra binds flags to it).
+// newTestRoot resets it per run so sequential in-test invocations don't inherit a previous
+// --json/--api. Production runs the process once, so the global is fine there.
+func newTestRoot() *cobra.Command {
+	cli = cliFlags{} // reset global flag state between runs
+	return newRoot()
 }
