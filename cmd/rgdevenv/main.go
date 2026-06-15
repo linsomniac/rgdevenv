@@ -17,7 +17,9 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	addClientFlags(root)
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newLBCmd(), newMapCmd(), newPortCmd(), newCACmd(), newStatusCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "rgdevenv: error:", err)
