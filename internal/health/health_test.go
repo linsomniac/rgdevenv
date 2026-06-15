@@ -23,7 +23,10 @@ func TestIdentitiesFromDedupAndSort(t *testing.T) {
 		{Name: "b", Mappings: []store.Mapping{{Upstream: store.Upstream{Scheme: "http", Host: "h2", Port: 9001}}}},
 		{Name: "a", Mappings: []store.Mapping{
 			{Upstream: store.Upstream{Scheme: "http", Host: "h1", Port: 9000}},
-			{Upstream: store.Upstream{Scheme: "http", Host: "h1", Port: 9000}}, // duplicate identity
+			{Upstream: store.Upstream{Scheme: "http", Host: "h1", Port: 9000}}, // duplicate identity within an LB
+		}},
+		{Name: "c", Mappings: []store.Mapping{
+			{Upstream: store.Upstream{Scheme: "http", Host: "h1", Port: 9000}}, // duplicate identity across LBs
 		}},
 	}}
 	ids := IdentitiesFrom(st)

@@ -41,13 +41,13 @@ func IdentityOf(up store.Upstream) Identity {
 // IdentitiesFrom returns the deduplicated, deterministically sorted set of
 // upstream identities referenced by any mapping in st.
 func IdentitiesFrom(st *store.State) []Identity {
-	seen := make(map[Identity]bool)
+	seen := make(map[Identity]struct{})
 	var out []Identity
 	for _, lb := range st.LoadBalancers {
 		for _, m := range lb.Mappings {
 			id := IdentityOf(m.Upstream)
-			if !seen[id] {
-				seen[id] = true
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
 				out = append(out, id)
 			}
 		}
@@ -58,6 +58,10 @@ func IdentitiesFrom(st *store.State) []Identity {
 
 // Entry is one tracked identity with its current status (for GET /status and the
 // API health detail).
+//
+// AIDEV-NOTE: CAName is deliberately omitted from this JSON shape (the §12
+// health entry shape doesn't include it). As a result two https/ca identities
+// differing only by CA collapse to one-looking Entry — acceptable for Phase 2b.
 type Entry struct {
 	Scheme  string `json:"scheme"`
 	Host    string `json:"host"`
