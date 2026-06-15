@@ -79,7 +79,7 @@ func (h *Handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	cn, _ := canon.Host(r.PathValue("name"))
 	h.audit(r, "create_mapping", fmt.Sprintf("%s:%d", cn, port))
-	writeJSON(w, http.StatusCreated, mappingInLB(st, cn, port))
+	writeJSON(w, http.StatusCreated, h.toMappingView(*mappingInLB(st, cn, port)))
 }
 
 func (h *Handler) putMapping(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,7 @@ func (h *Handler) putMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	cn, _ := canon.Host(r.PathValue("name"))
 	h.audit(r, "replace_mapping", fmt.Sprintf("%s:%d", cn, port))
-	writeJSON(w, http.StatusOK, mappingInLB(st, cn, port))
+	writeJSON(w, http.StatusOK, h.toMappingView(*mappingInLB(st, cn, port)))
 }
 
 func (h *Handler) deleteMapping(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/realgo/rgdevenv/internal/health"
 	"github.com/realgo/rgdevenv/internal/txn"
 	"github.com/realgo/rgdevenv/internal/upstream"
 )
@@ -26,13 +27,14 @@ func (h *Handler) listCAs(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResp struct {
-	Version         string `json:"version"`
-	HTTPSPort       int    `json:"https_port"`
-	HTTPPort        int    `json:"http_port"`
-	ActiveListeners []int  `json:"active_listeners"`
-	LoadBalancers   int    `json:"load_balancers"`
-	Mappings        int    `json:"mappings"`
-	Allocations     int    `json:"allocations"`
+	Version         string         `json:"version"`
+	HTTPSPort       int            `json:"https_port"`
+	HTTPPort        int            `json:"http_port"`
+	ActiveListeners []int          `json:"active_listeners"`
+	LoadBalancers   int            `json:"load_balancers"`
+	Mappings        int            `json:"mappings"`
+	Allocations     int            `json:"allocations"`
+	Upstreams       []health.Entry `json:"upstreams"`
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -45,9 +47,14 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	if h.activePorts != nil {
 		active = h.activePorts()
 	}
+	ups := h.health.List()
+	if ups == nil {
+		ups = []health.Entry{}
+	}
 	writeJSON(w, http.StatusOK, statusResp{
 		Version: h.version, HTTPSPort: h.httpsPort, HTTPPort: h.httpPort,
 		ActiveListeners: active, LoadBalancers: len(snap.LoadBalancers),
 		Mappings: mappings, Allocations: len(snap.PortAllocations),
+		Upstreams: ups,
 	})
 }

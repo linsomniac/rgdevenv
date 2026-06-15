@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/realgo/rgdevenv/internal/auth"
+	"github.com/realgo/rgdevenv/internal/health"
 	"github.com/realgo/rgdevenv/internal/store"
 	"github.com/realgo/rgdevenv/internal/txn"
 	"github.com/realgo/rgdevenv/internal/upstream"
@@ -17,7 +18,9 @@ import (
 
 // newAPITestHandler builds a Handler over a real (temp) store with no-op apply
 // and always-covered certs. Reused by the other API tests in this package.
-func newAPITestHandler(t *testing.T) *Handler {
+func newAPITestHandler(t *testing.T) *Handler { return newAPITestHandlerWith(t, nil) }
+
+func newAPITestHandlerWith(t *testing.T, reporter health.Reporter) *Handler {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
@@ -29,7 +32,7 @@ func newAPITestHandler(t *testing.T) *Handler {
 	return New(Deps{
 		Txn: m, Auth: auth.NewAuthenticator(testToken), Limiter: auth.NewRateLimiter(1000, time.Minute),
 		CADir: t.TempDir(), Version: "test", HTTPSPort: 443, HTTPPort: 80, PoolStart: 9000, PoolEnd: 9999,
-		ActivePorts: func() []int { return []int{443} }, Logger: discardLogger(),
+		ActivePorts: func() []int { return []int{443} }, Logger: discardLogger(), Health: reporter,
 	})
 }
 

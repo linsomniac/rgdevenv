@@ -17,11 +17,12 @@ func (h *Handler) registerLBRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) listLBs(w http.ResponseWriter, r *http.Request) {
-	lbs := h.txn.Snapshot().LoadBalancers
-	if lbs == nil {
-		lbs = []store.LoadBalancer{}
+	snap := h.txn.Snapshot()
+	out := make([]lbView, 0, len(snap.LoadBalancers))
+	for _, lb := range snap.LoadBalancers {
+		out = append(out, h.toLBView(lb))
 	}
-	writeJSON(w, http.StatusOK, lbs)
+	writeJSON(w, http.StatusOK, out)
 }
 
 type createLBReq struct {
@@ -46,7 +47,7 @@ func (h *Handler) createLB(w http.ResponseWriter, r *http.Request) {
 	}
 	cn, _ := canon.Host(req.Name)
 	h.audit(r, "create_lb", cn)
-	writeJSON(w, http.StatusCreated, lbByName(st, cn))
+	writeJSON(w, http.StatusCreated, h.toLBView(*lbByName(st, cn)))
 }
 
 func (h *Handler) getLB(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +61,7 @@ func (h *Handler) getLB(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, txn.NotFound("lb_not_found", "load balancer not found"))
 		return
 	}
-	writeJSON(w, http.StatusOK, lb)
+	writeJSON(w, http.StatusOK, h.toLBView(*lb))
 }
 
 type patchLBReq struct {
@@ -80,7 +81,7 @@ func (h *Handler) patchLB(w http.ResponseWriter, r *http.Request) {
 	}
 	cn, _ := canon.Host(r.PathValue("name"))
 	h.audit(r, "update_lb", cn)
-	writeJSON(w, http.StatusOK, lbByName(st, cn))
+	writeJSON(w, http.StatusOK, h.toLBView(*lbByName(st, cn)))
 }
 
 func (h *Handler) deleteLB(w http.ResponseWriter, r *http.Request) {

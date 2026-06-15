@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/realgo/rgdevenv/internal/auth"
+	"github.com/realgo/rgdevenv/internal/health"
 	"github.com/realgo/rgdevenv/internal/txn"
 )
 
@@ -26,6 +27,7 @@ type Deps struct {
 	PoolEnd     int
 	ActivePorts func() []int
 	Logger      *slog.Logger
+	Health      health.Reporter
 }
 
 // Handler is the management-plane http.Handler.
@@ -41,6 +43,7 @@ type Handler struct {
 	poolEnd     int
 	activePorts func() []int
 	logger      *slog.Logger
+	health      health.Reporter
 	mux         http.Handler
 }
 
@@ -49,11 +52,14 @@ func New(d Deps) *Handler {
 	if d.Logger == nil {
 		d.Logger = discardLogger()
 	}
+	if d.Health == nil {
+		d.Health = noopHealth{}
+	}
 	h := &Handler{
 		txn: d.Txn, auth: d.Auth, limiter: d.Limiter, caDir: d.CADir,
 		version: d.Version, httpsPort: d.HTTPSPort, httpPort: d.HTTPPort,
 		poolStart: d.PoolStart, poolEnd: d.PoolEnd,
-		activePorts: d.ActivePorts, logger: d.Logger,
+		activePorts: d.ActivePorts, logger: d.Logger, health: d.Health,
 	}
 	h.mux = h.buildMux()
 	return h
