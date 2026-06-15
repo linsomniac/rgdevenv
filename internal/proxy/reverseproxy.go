@@ -82,7 +82,15 @@ func BuildReverseProxy(up store.Upstream, listenTLS bool, dialer *upstream.Diale
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			// AIDEV-NOTE: full detail to logs; client gets a generic 502 (§8, §16).
+			// AIDEV-NOTE: a canceled request context means the CLIENT went away (or the
+			// server is shutting down), NOT an upstream failure — don't log it as an
+			// upstream error or feed it to the health checker (§17). Without this guard,
+			// normal client cancels would flap a healthy upstream to "down" once
+			// Threshold consecutive cancels land between probe rounds.
+			if r.Context().Err() != nil {
+				return
+			}
+			// full detail to logs; client gets a generic 502 (§8, §16).
 			logger.Warn("upstream error", "host", r.Host, "upstream", target.String(), "error", err)
 			if onError != nil {
 				onError()

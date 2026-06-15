@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net"
@@ -115,5 +116,27 @@ func TestReverseProxyInvokesErrorObserver(t *testing.T) {
 	case <-called:
 	case <-time.After(2 * time.Second):
 		t.Fatal("error observer was not invoked on upstream failure")
+	}
+}
+
+// A client that disconnects (canceled request context) must NOT be reported as an
+// upstream failure — otherwise normal client cancels flap healthy upstreams to
+// "down" (review finding #1).
+func TestReverseProxySkipsErrorObserverOnClientCancel(t *testing.T) {
+	dialer := upstream.New(upstream.NewPolicy(nil), upstream.SelfGuard{}, time.Second)
+	up := store.Upstream{Scheme: "http", Host: "127.0.0.1", Port: 9, TLS: store.UpstreamTLS{Mode: "verify"}}
+	called := make(chan struct{}, 1)
+	rp, err := BuildReverseProxy(up, true, dialer, "", DefaultLimits(), discardLogger(), func() { called <- struct{}{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // client is already gone before the request is dispatched
+	req := httptest.NewRequest("GET", "https://rg-1.sean.realgo.com/", nil).WithContext(ctx)
+	rp.ServeHTTP(httptest.NewRecorder(), req) // RoundTrip sees the canceled ctx → ErrorHandler
+	select {
+	case <-called:
+		t.Fatal("error observer must NOT fire when the client context is canceled")
+	default:
 	}
 }

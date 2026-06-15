@@ -33,16 +33,21 @@ func (t *Tracker) probe(ctx context.Context, id Identity) bool {
 	if t.cfg.Path == "" {
 		conn, err := d.DialContext(ctx, "tcp", addr)
 		if err != nil {
+			t.logger.Debug("health probe: tcp dial failed", "host", id.Host, "port", id.Port, "error", err)
 			return false
 		}
 		_ = conn.Close()
 		return true
 	}
 
-	transport := &http.Transport{DialContext: d.DialContext, DisableKeepAlives: true}
+	// AIDEV-NOTE: ForceAttemptHTTP2 mirrors the reverse proxy's transport
+	// (reverseproxy.go) so an HTTP/2-only upstream is probed the same way it is
+	// served — otherwise it would falsely report "down" while live traffic works.
+	transport := &http.Transport{DialContext: d.DialContext, DisableKeepAlives: true, ForceAttemptHTTP2: true}
 	if id.Scheme == "https" {
 		tlsCfg, err := upstream.TLSClientConfig(id.Mode, id.CAName, id.Host, t.caDir)
 		if err != nil {
+			t.logger.Debug("health probe: tls config failed", "host", id.Host, "error", err)
 			return false
 		}
 		transport.TLSClientConfig = tlsCfg
@@ -54,10 +59,12 @@ func (t *Tracker) probe(ctx context.Context, id Identity) bool {
 	url := id.Scheme + "://" + addr + t.cfg.Path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		t.logger.Debug("health probe: bad request", "url", url, "error", err)
 		return false
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		t.logger.Debug("health probe: request failed", "scheme", id.Scheme, "host", id.Host, "port", id.Port, "error", err)
 		return false
 	}
 	defer resp.Body.Close()

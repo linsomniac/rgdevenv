@@ -42,13 +42,21 @@ type hstate struct {
 	streak   int // consecutive identical raw samples
 }
 
-// New builds a Tracker. A nil logger discards. Threshold < 1 is treated as 1.
+// New builds a Tracker. A nil logger discards. Non-positive Threshold/Interval/
+// Timeout are floored to sane defaults (1, 15s, 5s) so a struct-built Config can't
+// produce a 0 ticker interval (panic) or an already-expired probe deadline.
 func New(cfg Config, caDir string, logger *slog.Logger) *Tracker {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if cfg.Threshold < 1 {
 		cfg.Threshold = 1
+	}
+	if cfg.Interval <= 0 {
+		cfg.Interval = 15 * time.Second
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 5 * time.Second
 	}
 	return &Tracker{cfg: cfg, caDir: caDir, logger: logger, states: make(map[Identity]*hstate)}
 }
@@ -115,11 +123,12 @@ func (t *Tracker) record(id Identity, healthy bool) {
 	defer t.mu.Unlock()
 	s := t.states[id]
 	if s == nil {
-		// AIDEV-NOTE: auto-seed — a live failure (RecordFailure) can arrive for an
-		// identity the probe loop hasn't seen yet; SetTargets prunes it later if the
-		// mapping is gone.
-		s = &hstate{status: Unknown}
-		t.states[id] = s
+		// AIDEV-NOTE: only SetTargets seeds identities. A record() for an unknown
+		// identity means it was pruned (its mapping was deleted) between SetTargets and
+		// an in-flight live failure (RecordFailure) — ignore it so a deleted upstream
+		// can't reappear in /status. The probe loop only records current targets, which
+		// are always already seeded.
+		return
 	}
 	if s.haveLast && s.last == healthy {
 		s.streak++
@@ -133,14 +142,17 @@ func (t *Tracker) record(id Identity, healthy bool) {
 		desired = Up
 	}
 	if s.status != desired && s.streak >= t.cfg.Threshold {
+		t.logger.Info("upstream health changed",
+			"scheme", id.Scheme, "host", id.Host, "port", id.Port, "from", s.status, "to", desired)
 		s.status = desired
 	}
 }
 
 // RecordFailure feeds a single unhealthy sample for up's identity (the live
-// proxy-failure feed, §17). Subject to the same hysteresis as active probes.
-// If the identity is not in the current probe set, the state is auto-seeded and
-// will be pruned by the next SetTargets call that omits it.
+// proxy-failure feed, §17), subject to the same hysteresis as active probes. It is
+// IGNORED when the identity is not currently tracked (only SetTargets seeds
+// identities), so a live failure racing a mapping deletion can't resurrect the
+// deleted upstream in /status.
 func (t *Tracker) RecordFailure(up store.Upstream) { t.record(IdentityOf(up), false) }
 
 // Run probes all targets every interval until ctx is cancelled. A disabled
@@ -149,11 +161,7 @@ func (t *Tracker) Run(ctx context.Context) {
 	if !t.cfg.Enabled {
 		return
 	}
-	interval := t.cfg.Interval
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(t.cfg.Interval) // New() guarantees Interval > 0
 	defer ticker.Stop()
 	t.checkOnce(ctx)
 	for {

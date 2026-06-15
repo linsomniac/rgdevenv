@@ -1,9 +1,12 @@
 package health
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ func TestHysteresisFlipsOnlyAfterThreshold(t *testing.T) {
 	tr := New(Config{Threshold: 2}, "", nil)
 	u := up("localhost", 9000)
 	id := IdentityOf(u)
+	tr.SetTargets([]Identity{id}) // record() only updates tracked identities
 
 	if tr.Status(u) != Unknown {
 		t.Fatal("initial status must be unknown")
@@ -62,9 +66,23 @@ func TestSetTargetsSeedsAndPrunes(t *testing.T) {
 func TestNewBumpsZeroThreshold(t *testing.T) {
 	tr := New(Config{Threshold: 0}, "", nil)
 	u := up("h", 1)
+	tr.SetTargets([]Identity{IdentityOf(u)})
 	tr.record(IdentityOf(u), true)
 	if tr.Status(u) != Up {
 		t.Fatal("threshold 0 must be treated as 1 (one sample flips)")
+	}
+}
+
+func TestNewFloorsIntervalAndTimeout(t *testing.T) {
+	tr := New(Config{}, "", nil) // all zero values
+	if tr.cfg.Threshold < 1 {
+		t.Fatalf("Threshold not floored: %d", tr.cfg.Threshold)
+	}
+	if tr.cfg.Interval <= 0 {
+		t.Fatalf("Interval not floored: %v", tr.cfg.Interval)
+	}
+	if tr.cfg.Timeout <= 0 {
+		t.Fatalf("Timeout not floored: %v", tr.cfg.Timeout)
 	}
 }
 
@@ -109,8 +127,36 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 func TestRecordFailureFeedsHysteresis(t *testing.T) {
 	tr := New(Config{Threshold: 1}, "", nil)
 	u := up("localhost", 9000)
+	tr.SetTargets([]Identity{IdentityOf(u)}) // must be tracked
 	tr.RecordFailure(u)
 	if tr.Status(u) != Down {
-		t.Fatalf("RecordFailure → down, got %s", tr.Status(u))
+		t.Fatalf("RecordFailure on a tracked identity → down, got %s", tr.Status(u))
+	}
+}
+
+// A live failure for an identity that was never tracked (or was just pruned by a
+// mapping delete) must NOT resurrect it — otherwise a deleted upstream lingers in
+// /status (review finding #2).
+func TestRecordFailureIgnoresUntracked(t *testing.T) {
+	tr := New(Config{Threshold: 1}, "", nil)
+	ghost := up("deleted", 1)
+	tr.RecordFailure(ghost)
+	if tr.Status(ghost) != Unknown {
+		t.Fatalf("untracked RecordFailure must be ignored, got %s", tr.Status(ghost))
+	}
+	if got := tr.List(); len(got) != 0 {
+		t.Fatalf("untracked identity must not appear in List: %+v", got)
+	}
+}
+
+func TestRecordLogsStatusTransition(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr := New(Config{Threshold: 1}, "", lg)
+	u := up("h", 1)
+	tr.SetTargets([]Identity{IdentityOf(u)})
+	tr.record(IdentityOf(u), true) // Unknown → Up
+	if !strings.Contains(buf.String(), "upstream health changed") || !strings.Contains(buf.String(), "to=up") {
+		t.Fatalf("expected a status-transition log, got %q", buf.String())
 	}
 }
