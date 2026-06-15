@@ -109,20 +109,5 @@ func setForwardedHeaders(pr *httputil.ProxyRequest, listenTLS bool) {
 }
 
 func upstreamTLSConfig(up store.Upstream, caDir string) (*tls.Config, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: up.Host}
-	switch up.TLS.Mode {
-	case "verify", "":
-		// verify against system roots
-	case "skip":
-		cfg.InsecureSkipVerify = true // dev-only (§7)
-	case "ca":
-		pool, err := upstream.LoadCA(caDir, up.TLS.CAName)
-		if err != nil {
-			return nil, err
-		}
-		cfg.RootCAs = pool // trusts ONLY the named private CA
-	default:
-		return nil, fmt.Errorf("proxy: unknown upstream tls mode %q", up.TLS.Mode)
-	}
-	return cfg, nil
+	return upstream.TLSClientConfig(up.TLS.Mode, up.TLS.CAName, up.Host, caDir)
 }
