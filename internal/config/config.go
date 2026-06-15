@@ -67,8 +67,8 @@ type HealthConfig struct {
 	Enabled         bool   `toml:"enabled"`
 	IntervalSeconds int    `toml:"interval_seconds"`
 	TimeoutSeconds  int    `toml:"timeout_seconds"`
-	Path            string `toml:"path"` // "" → TCP-connect probe; else HTTP(S) GET of this path
-	Threshold       int    `toml:"threshold"`
+	Path            string `toml:"path"`      // "" → TCP-connect probe; else HTTP(S) GET of this path
+	Threshold       int    `toml:"threshold"` // consecutive like probe results required to flip health status
 }
 
 // Default returns the built-in defaults (§9).
@@ -181,14 +181,18 @@ func (c *Config) normalize() error {
 	}
 	// AIDEV-NOTE: health (§17). interval/timeout are integer SECONDS (matches the
 	// int-based config style); a non-empty probe path is forced to start with "/".
-	if c.Health.IntervalSeconds < 1 {
-		return fmt.Errorf("config: health.interval_seconds must be >= 1")
-	}
-	if c.Health.TimeoutSeconds < 1 {
-		return fmt.Errorf("config: health.timeout_seconds must be >= 1")
-	}
-	if c.Health.Threshold < 1 {
-		return fmt.Errorf("config: health.threshold must be >= 1")
+	// The numeric checks only apply when enabled: a disabled checker no-ops
+	// downstream (graceful disable), so 0 values are tolerated when enabled=false.
+	if c.Health.Enabled {
+		if c.Health.IntervalSeconds < 1 {
+			return fmt.Errorf("config: health.interval_seconds must be >= 1")
+		}
+		if c.Health.TimeoutSeconds < 1 {
+			return fmt.Errorf("config: health.timeout_seconds must be >= 1")
+		}
+		if c.Health.Threshold < 1 {
+			return fmt.Errorf("config: health.threshold must be >= 1")
+		}
 	}
 	if c.Health.Path != "" && !strings.HasPrefix(c.Health.Path, "/") {
 		c.Health.Path = "/" + c.Health.Path

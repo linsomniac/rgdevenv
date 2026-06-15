@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,15 +121,23 @@ func TestHealthDefaults(t *testing.T) {
 }
 
 func TestHealthValidation(t *testing.T) {
-	for name, mut := range map[string]func(*Config){
-		"interval":  func(c *Config) { c.Health.IntervalSeconds = 0 },
-		"timeout":   func(c *Config) { c.Health.TimeoutSeconds = -1 },
-		"threshold": func(c *Config) { c.Health.Threshold = 0 },
-	} {
-		c := Default()
-		mut(c)
-		if err := c.normalize(); err == nil {
+	cases := map[string]struct {
+		mut  func(*Config)
+		want string // expected substring of the normalize error
+	}{
+		"interval":  {func(c *Config) { c.Health.IntervalSeconds = 0 }, "health.interval_seconds"},
+		"timeout":   {func(c *Config) { c.Health.TimeoutSeconds = -1 }, "health.timeout_seconds"},
+		"threshold": {func(c *Config) { c.Health.Threshold = 0 }, "health.threshold"},
+	}
+	for name, tc := range cases {
+		c := Default() // Enabled: true, so the numeric checks fire
+		tc.mut(c)
+		err := c.normalize()
+		if err == nil {
 			t.Fatalf("%s: expected normalize error", name)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error %q does not contain %q", name, err, tc.want)
 		}
 	}
 }
