@@ -1,0 +1,134 @@
+package health
+
+import (
+	"io"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/realgo/rgdevenv/internal/store"
+	"github.com/realgo/rgdevenv/internal/upstream"
+)
+
+// Config tunes the checker (§17).
+type Config struct {
+	Enabled   bool
+	Interval  time.Duration
+	Timeout   time.Duration
+	Path      string // "" → TCP connect; else HTTP(S) GET of this path
+	Threshold int    // consecutive like samples required to flip status
+}
+
+// Tracker probes upstream identities and reports flap-resistant status.
+// It implements Reporter.
+type Tracker struct {
+	cfg    Config
+	caDir  string
+	logger *slog.Logger
+
+	dialer  atomic.Pointer[upstream.Dialer] // the shared safe dialer (refreshed each Apply)
+	targets atomic.Pointer[[]Identity]      // current probe set
+
+	mu     sync.Mutex
+	states map[Identity]*hstate
+}
+
+type hstate struct {
+	status   Status
+	last     bool // last raw sample healthy?
+	haveLast bool
+	streak   int // consecutive identical raw samples
+}
+
+// New builds a Tracker. A nil logger discards. Threshold < 1 is treated as 1.
+func New(cfg Config, caDir string, logger *slog.Logger) *Tracker {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if cfg.Threshold < 1 {
+		cfg.Threshold = 1
+	}
+	return &Tracker{cfg: cfg, caDir: caDir, logger: logger, states: make(map[Identity]*hstate)}
+}
+
+// SetTargets replaces the probe set: new identities seed at unknown; identities
+// no longer present are pruned (so a removed mapping stops reporting).
+func (t *Tracker) SetTargets(ids []Identity) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	want := make(map[Identity]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+		if t.states[id] == nil {
+			t.states[id] = &hstate{status: Unknown}
+		}
+	}
+	for id := range t.states {
+		if !want[id] {
+			delete(t.states, id)
+		}
+	}
+	cp := append([]Identity(nil), ids...)
+	t.targets.Store(&cp)
+}
+
+// Status reports the current health of up's identity (Reporter).
+func (t *Tracker) Status(up store.Upstream) Status {
+	id := IdentityOf(up)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s := t.states[id]; s != nil {
+		return s.status
+	}
+	return Unknown
+}
+
+// List returns all tracked identities with status, deterministically ordered
+// (Reporter).
+func (t *Tracker) List() []Entry {
+	t.mu.Lock()
+	ids := make([]Identity, 0, len(t.states))
+	status := make(map[Identity]Status, len(t.states))
+	for id, s := range t.states {
+		ids = append(ids, id)
+		status[id] = s.status
+	}
+	t.mu.Unlock()
+
+	sortIdentities(ids)
+	out := make([]Entry, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, Entry{Scheme: id.Scheme, Host: id.Host, Port: id.Port, TLSMode: id.Mode, Health: status[id]})
+	}
+	return out
+}
+
+// record applies one raw sample under hysteresis. Used by the active probe loop
+// AND the live-failure feed.
+//
+// AIDEV-NOTE: status changes only after `threshold` CONSECUTIVE identical raw
+// samples (§17). A flapping upstream stays put (or unknown).
+func (t *Tracker) record(id Identity, healthy bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := t.states[id]
+	if s == nil {
+		s = &hstate{status: Unknown}
+		t.states[id] = s
+	}
+	if s.haveLast && s.last == healthy {
+		s.streak++
+	} else {
+		s.streak = 1
+	}
+	s.last, s.haveLast = healthy, true
+
+	desired := Down
+	if healthy {
+		desired = Up
+	}
+	if s.status != desired && s.streak >= t.cfg.Threshold {
+		s.status = desired
+	}
+}
