@@ -49,7 +49,6 @@ func (t *Tracker) probe(ctx context.Context, id Identity) bool {
 	}
 	client := &http.Client{
 		Transport:     transport,
-		Timeout:       t.cfg.Timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	url := id.Scheme + "://" + addr + t.cfg.Path

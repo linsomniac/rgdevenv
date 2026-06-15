@@ -51,6 +51,7 @@ func TestProbeHTTPUpAndDown(t *testing.T) {
 
 func TestProbeTCPMode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
 	h, p := hostPort(t, srv.URL)
 
 	tr := New(Config{Path: "", Timeout: time.Second}, "", nil)
