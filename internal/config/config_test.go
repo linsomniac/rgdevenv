@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeTOML(t *testing.T, body string) string {
@@ -93,5 +94,52 @@ func TestNormalizeRejectsMgmtBindPortInPool(t *testing.T) {
 	path := writeTOML(t, "[management]\nbind = \"127.0.0.1:9500\"\n[port_pool]\nstart = 9000\nend = 9999\n")
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error: management bind port inside pool")
+	}
+}
+
+func TestHealthDefaults(t *testing.T) {
+	cfg, err := Load("") // no file → defaults + env
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Health.Enabled {
+		t.Fatal("health should default to enabled")
+	}
+	if cfg.HealthInterval() != 15*time.Second {
+		t.Fatalf("interval = %v, want 15s", cfg.HealthInterval())
+	}
+	if cfg.HealthTimeout() != 5*time.Second {
+		t.Fatalf("timeout = %v, want 5s", cfg.HealthTimeout())
+	}
+	if cfg.Health.Path != "/" {
+		t.Fatalf("path = %q, want /", cfg.Health.Path)
+	}
+	if cfg.Health.Threshold != 2 {
+		t.Fatalf("threshold = %d, want 2", cfg.Health.Threshold)
+	}
+}
+
+func TestHealthValidation(t *testing.T) {
+	for name, mut := range map[string]func(*Config){
+		"interval":  func(c *Config) { c.Health.IntervalSeconds = 0 },
+		"timeout":   func(c *Config) { c.Health.TimeoutSeconds = -1 },
+		"threshold": func(c *Config) { c.Health.Threshold = 0 },
+	} {
+		c := Default()
+		mut(c)
+		if err := c.normalize(); err == nil {
+			t.Fatalf("%s: expected normalize error", name)
+		}
+	}
+}
+
+func TestHealthPathLeadingSlash(t *testing.T) {
+	c := Default()
+	c.Health.Path = "healthz"
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Health.Path != "/healthz" {
+		t.Fatalf("path = %q, want /healthz", c.Health.Path)
 	}
 }

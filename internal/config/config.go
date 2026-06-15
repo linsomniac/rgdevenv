@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -35,6 +36,7 @@ type Config struct {
 	PortPool   PortPoolConfig   `toml:"port_pool"`
 	Upstreams  UpstreamsConfig  `toml:"upstreams"`
 	Log        LogConfig        `toml:"log"`
+	Health     HealthConfig     `toml:"health"`
 }
 
 type CertPair struct {
@@ -61,6 +63,14 @@ type LogConfig struct {
 	Access bool   `toml:"access"`
 }
 
+type HealthConfig struct {
+	Enabled         bool   `toml:"enabled"`
+	IntervalSeconds int    `toml:"interval_seconds"`
+	TimeoutSeconds  int    `toml:"timeout_seconds"`
+	Path            string `toml:"path"` // "" → TCP-connect probe; else HTTP(S) GET of this path
+	Threshold       int    `toml:"threshold"`
+}
+
 // Default returns the built-in defaults (§9).
 func Default() *Config {
 	return &Config{
@@ -73,6 +83,7 @@ func Default() *Config {
 		Management: ManagementConfig{AuthRateLimitPerMin: 10},
 		PortPool:   PortPoolConfig{Start: 9000, End: 9999},
 		Log:        LogConfig{Level: "info", Access: true},
+		Health:     HealthConfig{Enabled: true, IntervalSeconds: 15, TimeoutSeconds: 5, Path: "/", Threshold: 2},
 	}
 }
 
@@ -168,6 +179,20 @@ func (c *Config) normalize() error {
 		}
 		c.ManagementHostname = h
 	}
+	// AIDEV-NOTE: health (§17). interval/timeout are integer SECONDS (matches the
+	// int-based config style); a non-empty probe path is forced to start with "/".
+	if c.Health.IntervalSeconds < 1 {
+		return fmt.Errorf("config: health.interval_seconds must be >= 1")
+	}
+	if c.Health.TimeoutSeconds < 1 {
+		return fmt.Errorf("config: health.timeout_seconds must be >= 1")
+	}
+	if c.Health.Threshold < 1 {
+		return fmt.Errorf("config: health.threshold must be >= 1")
+	}
+	if c.Health.Path != "" && !strings.HasPrefix(c.Health.Path, "/") {
+		c.Health.Path = "/" + c.Health.Path
+	}
 	return c.validateMgmtBind()
 }
 
@@ -243,4 +268,14 @@ func isLoopbackHost(h string) bool {
 	}
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
+}
+
+// HealthInterval is the probe interval as a duration.
+func (c *Config) HealthInterval() time.Duration {
+	return time.Duration(c.Health.IntervalSeconds) * time.Second
+}
+
+// HealthTimeout is the per-probe timeout as a duration.
+func (c *Config) HealthTimeout() time.Duration {
+	return time.Duration(c.Health.TimeoutSeconds) * time.Second
 }
