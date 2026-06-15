@@ -115,6 +115,9 @@ func (t *Tracker) record(id Identity, healthy bool) {
 	defer t.mu.Unlock()
 	s := t.states[id]
 	if s == nil {
+		// AIDEV-NOTE: auto-seed — a live failure (RecordFailure) can arrive for an
+		// identity the probe loop hasn't seen yet; SetTargets prunes it later if the
+		// mapping is gone.
 		s = &hstate{status: Unknown}
 		t.states[id] = s
 	}
@@ -133,6 +136,10 @@ func (t *Tracker) record(id Identity, healthy bool) {
 		s.status = desired
 	}
 }
+
+// RecordFailure feeds a single unhealthy sample for up's identity (the live
+// proxy-failure feed, §17). Subject to the same hysteresis as active probes.
+func (t *Tracker) RecordFailure(up store.Upstream) { t.record(IdentityOf(up), false) }
 
 // Run probes all targets every interval until ctx is cancelled. A disabled
 // tracker returns immediately. The first round runs eagerly (no initial delay).

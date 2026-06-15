@@ -42,7 +42,7 @@ func TestReverseProxyOverwritesForwardedHeaders(t *testing.T) {
 
 	dialer := upstream.New(upstream.NewPolicy(nil), upstream.SelfGuard{}, 5*time.Second)
 	up := store.Upstream{Scheme: "http", Host: host, Port: port, TLS: store.UpstreamTLS{Mode: "verify"}}
-	rp, err := BuildReverseProxy(up, true /*listenTLS*/, dialer, "", DefaultLimits(), discardLogger())
+	rp, err := BuildReverseProxy(up, true /*listenTLS*/, dialer, "", DefaultLimits(), discardLogger(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestReverseProxyOverwritesForwardedHeaders(t *testing.T) {
 func TestReverseProxy502OnPolicyDenial(t *testing.T) {
 	dialer := upstream.New(upstream.NewPolicy(nil), upstream.SelfGuard{}, time.Second)
 	up := store.Upstream{Scheme: "http", Host: "blocked.example.com", Port: 80, TLS: store.UpstreamTLS{Mode: "verify"}}
-	rp, err := BuildReverseProxy(up, true, dialer, "", DefaultLimits(), discardLogger())
+	rp, err := BuildReverseProxy(up, true, dialer, "", DefaultLimits(), discardLogger(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +93,27 @@ func TestReverseProxy502OnPolicyDenial(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if strings.Contains(string(body), "blocked.example.com") {
 		t.Fatal("502 body leaked upstream host")
+	}
+}
+
+func TestReverseProxyInvokesErrorObserver(t *testing.T) {
+	dialer := upstream.New(upstream.NewPolicy(nil), upstream.SelfGuard{}, time.Second)
+	up := store.Upstream{Scheme: "http", Host: "blocked.example.com", Port: 80, TLS: store.UpstreamTLS{Mode: "verify"}}
+	called := make(chan struct{}, 1)
+	rp, err := BuildReverseProxy(up, true, dialer, "", DefaultLimits(), discardLogger(), func() { called <- struct{}{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := httptest.NewServer(rp)
+	defer front.Close()
+	resp, err := http.Get(front.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("error observer was not invoked on upstream failure")
 	}
 }

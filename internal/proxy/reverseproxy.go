@@ -48,8 +48,9 @@ func DefaultLimits() Limits {
 
 // BuildReverseProxy builds an httputil.ReverseProxy for one upstream using the
 // shared safe dialer and the upstream's TLS mode (§7, §8). listenTLS is the
-// front-end mapping's TLS state (used for X-Forwarded-Proto).
-func BuildReverseProxy(up store.Upstream, listenTLS bool, dialer *upstream.Dialer, caDir string, limits Limits, logger *slog.Logger) (*httputil.ReverseProxy, error) {
+// front-end mapping's TLS state (used for X-Forwarded-Proto). onError, if
+// non-nil, is called each time the ErrorHandler fires (live-failure feed, §17).
+func BuildReverseProxy(up store.Upstream, listenTLS bool, dialer *upstream.Dialer, caDir string, limits Limits, logger *slog.Logger, onError func()) (*httputil.ReverseProxy, error) {
 	if up.Scheme != "http" && up.Scheme != "https" {
 		return nil, fmt.Errorf("proxy: invalid upstream scheme %q", up.Scheme)
 	}
@@ -83,6 +84,9 @@ func BuildReverseProxy(up store.Upstream, listenTLS bool, dialer *upstream.Diale
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			// AIDEV-NOTE: full detail to logs; client gets a generic 502 (§8, §16).
 			logger.Warn("upstream error", "host", r.Host, "upstream", target.String(), "error", err)
+			if onError != nil {
+				onError()
+			}
 			writeBadGateway(w)
 		},
 	}

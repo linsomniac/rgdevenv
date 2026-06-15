@@ -105,3 +105,12 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Run did not stop on context cancel")
 	}
 }
+
+func TestRecordFailureFeedsHysteresis(t *testing.T) {
+	tr := New(Config{Threshold: 1}, "", nil)
+	u := up("localhost", 9000)
+	tr.RecordFailure(u)
+	if tr.Status(u) != Down {
+		t.Fatalf("RecordFailure → down, got %s", tr.Status(u))
+	}
+}

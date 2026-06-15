@@ -33,11 +33,12 @@ type RoutingTable struct {
 
 // RouteDeps are the dependencies for building a routing table.
 type RouteDeps struct {
-	Dialer   *upstream.Dialer
-	Resolver *CertResolver
-	CADir    string
-	Limits   Limits
-	Logger   *slog.Logger
+	Dialer          *upstream.Dialer
+	Resolver        *CertResolver
+	CADir           string
+	Limits          Limits
+	Logger          *slog.Logger
+	OnUpstreamError func(store.Upstream) // optional: live-failure feed for health (§17)
 }
 
 // BuildRoutingTable builds routes for all servable mappings and returns the
@@ -65,7 +66,12 @@ func BuildRoutingTable(st *store.State, deps RouteDeps) (*RoutingTable, []Degrad
 				degraded = append(degraded, Degraded{name, m.ListenPort, "host not covered by certificate"})
 				continue
 			}
-			h, err := BuildReverseProxy(m.Upstream, m.ListenTLS, deps.Dialer, deps.CADir, deps.Limits, deps.Logger)
+			var onErr func()
+			if deps.OnUpstreamError != nil {
+				up := m.Upstream
+				onErr = func() { deps.OnUpstreamError(up) }
+			}
+			h, err := BuildReverseProxy(m.Upstream, m.ListenTLS, deps.Dialer, deps.CADir, deps.Limits, deps.Logger, onErr)
 			if err != nil {
 				degraded = append(degraded, Degraded{name, m.ListenPort, "upstream not servable: " + err.Error()})
 				continue

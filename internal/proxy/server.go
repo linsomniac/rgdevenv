@@ -36,6 +36,8 @@ type Server struct {
 	listeners *Listeners
 	mgmt      atomic.Pointer[http.Handler]    // optional management-plane handler (Phase 2)
 	dialer    atomic.Pointer[upstream.Dialer] // the safe dialer from the latest Apply (shared with the health checker)
+
+	onUpstreamErr func(store.Upstream) // set once before serving (SetUpstreamErrorObserver)
 }
 
 // NewServer constructs a Server; the HTTPS/on-demand TLS listeners use
@@ -65,6 +67,11 @@ func (s *Server) SetManagementHandler(h http.Handler) {
 	s.mgmt.Store(&h)
 }
 
+// SetUpstreamErrorObserver installs a callback invoked when a live proxy request
+// to an upstream fails; the health checker uses it to feed status (§17). Set it
+// before serving.
+func (s *Server) SetUpstreamErrorObserver(f func(store.Upstream)) { s.onUpstreamErr = f }
+
 // Apply rebuilds routing + listeners from st and publishes atomically. Returns
 // degraded mappings. Used at startup and (Phase 2) after each committed
 // transaction.
@@ -77,11 +84,12 @@ func (s *Server) Apply(st *store.State) []Degraded {
 	s.dialer.Store(dialer)
 
 	table, degraded := BuildRoutingTable(st, RouteDeps{
-		Dialer:   dialer,
-		Resolver: s.resolver,
-		CADir:    s.cfg.CADir,
-		Limits:   s.limits,
-		Logger:   s.logger,
+		Dialer:          dialer,
+		Resolver:        s.resolver,
+		CADir:           s.cfg.CADir,
+		Limits:          s.limits,
+		Logger:          s.logger,
+		OnUpstreamError: s.onUpstreamErr,
 	})
 
 	desired := table.DesiredListeners(s.cfg.HTTPSPort, s.cfg.HTTPPort)
