@@ -99,7 +99,7 @@ func TestSetupServerWiring(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv, st, _, err := setupServer(cfg, logger)
+	srv, st, _, _, err := setupServer(cfg, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

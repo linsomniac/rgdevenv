@@ -18,6 +18,7 @@ import (
 	"github.com/realgo/rgdevenv/internal/api"
 	"github.com/realgo/rgdevenv/internal/auth"
 	"github.com/realgo/rgdevenv/internal/config"
+	"github.com/realgo/rgdevenv/internal/health"
 	"github.com/realgo/rgdevenv/internal/proxy"
 	"github.com/realgo/rgdevenv/internal/registry"
 	"github.com/realgo/rgdevenv/internal/store"
@@ -47,15 +48,16 @@ func runServe(configPath string) error {
 	}
 	logger, levelVar := newLogger(cfg.Log.Level)
 
-	srv, st, mgmtHandler, err := setupServer(cfg, logger)
+	srv, st, mgmtHandler, tracker, err := setupServer(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
-	for _, d := range srv.Apply(st.Snapshot()) {
-		logger.Warn("mapping degraded", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
-	}
+	applyAndTrack(srv, tracker, st.Snapshot(), logger)
+	healthCtx, cancelHealth := context.WithCancel(context.Background())
+	defer cancelHealth()
+	go tracker.Run(healthCtx)
 
 	var mgmtBind *http.Server
 	if cfg.Management.Bind != "" {
@@ -66,28 +68,28 @@ func runServe(configPath string) error {
 	}
 
 	logger.Info("rgdevenv listening", "https_port", cfg.HTTPSPort, "http_port", cfg.HTTPPort, "bind", cfg.BindAddr)
-	return runSignals(configPath, srv, st, mgmtBind, logger, levelVar)
+	return runSignals(configPath, srv, st, tracker, mgmtBind, logger, levelVar)
 }
 
 // setupServer opens + validates + reconciles the store, builds the proxy server,
 // and installs the management plane (auth + transaction + REST API) at the
 // MgmtHost seam. It does NOT bind sockets (call srv.Apply); it returns the
 // management handler so the caller can also serve it on the optional bind.
-func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store.Store, http.Handler, error) {
+func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store.Store, http.Handler, *health.Tracker, error) {
 	st, err := store.Open(cfg.StateFile)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	snap := st.Snapshot()
 	if err := store.Validate(snap); err != nil {
 		st.Close()
-		return nil, nil, nil, fmt.Errorf("state invalid: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("state invalid: %w", err)
 	}
 	if allocs, changed := registry.Reconcile(snap); changed {
 		snap.PortAllocations = allocs
 		if err := st.Save(snap); err != nil {
 			st.Close()
-			return nil, nil, nil, fmt.Errorf("persist reconciled state: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("persist reconciled state: %w", err)
 		}
 		st.Publish(snap)
 		logger.Info("reconciled orphaned port allocations")
@@ -96,7 +98,7 @@ func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store
 	resolver, err := proxy.NewCertResolver(cfg.AllCertPairs())
 	if err != nil {
 		st.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	limits := proxy.DefaultLimits()
@@ -109,15 +111,22 @@ func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store
 		DialTimeout: limits.DialTimeout,
 	}, upstream.NewPolicy(cfg.Upstreams.Allow), resolver, limits, logger)
 
+	tracker := health.New(health.Config{
+		Enabled:   cfg.Health.Enabled,
+		Interval:  cfg.HealthInterval(),
+		Timeout:   cfg.HealthTimeout(),
+		Path:      cfg.Health.Path,
+		Threshold: cfg.Health.Threshold,
+	}, cfg.CADir, logger)
+	srv.SetUpstreamErrorObserver(tracker.RecordFailure)
+
 	token, err := auth.LoadToken(cfg.TokenFile)
 	if err != nil {
 		st.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	mgr := txn.New(st, func(state *store.State) {
-		for _, d := range srv.Apply(state) {
-			logger.Warn("mapping degraded", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
-		}
+		applyAndTrack(srv, tracker, state, logger)
 	}, resolver.Covers, upstream.NewPolicy(cfg.Upstreams.Allow), txn.Config{
 		PoolStart:    cfg.PortPool.Start,
 		PoolEnd:      cfg.PortPool.End,
@@ -139,9 +148,20 @@ func setupServer(cfg *config.Config, logger *slog.Logger) (*proxy.Server, *store
 		PoolEnd:     cfg.PortPool.End,
 		ActivePorts: srv.ActivePorts,
 		Logger:      logger,
+		Health:      tracker,
 	})
 	srv.SetManagementHandler(mgmtHandler)
-	return srv, st, mgmtHandler, nil
+	return srv, st, mgmtHandler, tracker, nil
+}
+
+// applyAndTrack reconfigures the proxy from state and refreshes the health
+// checker's dialer + target set so both stay consistent after every change.
+func applyAndTrack(srv *proxy.Server, tracker *health.Tracker, state *store.State, logger *slog.Logger) {
+	for _, d := range srv.Apply(state) {
+		logger.Warn("mapping degraded", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
+	}
+	tracker.SetDialer(srv.Dialer())
+	tracker.SetTargets(health.IdentitiesFrom(state))
 }
 
 // startMgmtBind serves the management handler on a separate plaintext listener
@@ -172,7 +192,7 @@ func startMgmtBind(bind string, h http.Handler, limits proxy.Limits, logger *slo
 }
 
 // runSignals blocks until SIGTERM/SIGINT, handling SIGHUP reloads in between.
-func runSignals(configPath string, srv *proxy.Server, st *store.Store, mgmtBind *http.Server, logger *slog.Logger, levelVar *slog.LevelVar) error {
+func runSignals(configPath string, srv *proxy.Server, st *store.Store, tracker *health.Tracker, mgmtBind *http.Server, logger *slog.Logger, levelVar *slog.LevelVar) error {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
@@ -192,9 +212,7 @@ func runSignals(configPath string, srv *proxy.Server, st *store.Store, mgmtBind 
 			} else {
 				logger.Info("certificates reloaded")
 			}
-			for _, d := range srv.Apply(st.Snapshot()) {
-				logger.Warn("mapping degraded after reload", "lb", d.LB, "listen_port", d.ListenPort, "reason", d.Reason)
-			}
+			applyAndTrack(srv, tracker, st.Snapshot(), logger)
 		case syscall.SIGTERM, syscall.SIGINT:
 			logger.Info("shutting down")
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
