@@ -7,6 +7,11 @@ import (
 	"github.com/realgo/rgdevenv/internal/store"
 )
 
+// AIDEV-NOTE: mappingView and lbView manually mirror store.Mapping /
+// store.LoadBalancer plus the computed "health" field. If you add a field to
+// either store type you MUST add it here too, or it will silently disappear from
+// API responses — there is no compile-time enforcement of this invariant.
+
 // mappingView is a store.Mapping plus its resolved health (§12 "with health").
 type mappingView struct {
 	ListenPort    int            `json:"listen_port"`
