@@ -82,7 +82,7 @@ func TestHealthEndToEnd(t *testing.T) {
 	if code, body := call("POST", "/api/v1/lbs", `{"name":"rg-1.sean.realgo.com"}`); code != http.StatusCreated {
 		t.Fatalf("create lb: %d %s", code, body)
 	}
-	mbody := fmt.Sprintf(`{"listen_port":%d,"listen_tls":true,"upstream":{"scheme":"http","host":%q,"port":%d,"tls":{"mode":"verify"}}}`, httpsPort, bhost, bport)
+	mbody := fmt.Sprintf(`{"listen_port":%d,"listen_tls":true,"upstream":{"scheme":"http","host":%q,"port":%d}}`, httpsPort, bhost, bport)
 	if code, body := call("POST", "/api/v1/lbs/rg-1.sean.realgo.com/mappings", mbody); code != http.StatusCreated {
 		t.Fatalf("create mapping: %d %s", code, body)
 	}
