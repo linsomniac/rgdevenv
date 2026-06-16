@@ -48,6 +48,11 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must win over component display rules: .overlay/.login/
+   .banner set display:flex, which otherwise overrides [hidden] and leaves the
+   confirm dialog (and the login view after auth) visible. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
