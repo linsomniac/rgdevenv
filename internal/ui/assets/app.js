@@ -13,6 +13,7 @@ const labelEditing = new Set(); // lb names whose label is being edited
 let addingLB = false;           // the "add load balancer" form is open
 let cas = [];                   // CA names for the upstream-TLS dropdown
 let pollTimer = null;
+let polling = false;            // in-flight guard so slow polls can't overlap
 
 // ---- tiny DOM helpers ------------------------------------------------------
 function byId(id) { return document.getElementById(id); }
@@ -70,6 +71,7 @@ async function api(method, path, body) {
 function handleUnauthorized() {
   clearToken();
   stopPolling();
+  settleConfirm(false); // a destructive-action dialog must not survive into the login view
   showLogin();
 }
 
@@ -109,10 +111,22 @@ function fieldFocused() {
   const a = document.activeElement;
   return !!a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
 }
+// AIDEV-NOTE: "dirty" means a field has been CHANGED FROM ITS DEFAULT, not merely
+// non-empty. A freshly-rendered mapping form has a <select> ("mode") sitting at its
+// default "verify" and the label editor pre-fills the current label; treating those
+// as dirty would suspend the 5s health poll the whole time any panel is open. Compare
+// each field to its default so only genuine in-progress edits pause polling.
+function fieldDirty(i) {
+  if (i.type === 'checkbox' || i.type === 'radio') return i.checked !== i.defaultChecked;
+  if (i.tagName === 'SELECT') {
+    const def = Array.from(i.options).find((o) => o.defaultSelected) || i.options[0];
+    return !!def && i.value !== def.value;
+  }
+  return i.value !== i.defaultValue;
+}
 function hasDirtyField() {
   for (const i of document.querySelectorAll('#dashboard input, #dashboard select')) {
-    if (i.type === 'checkbox') { if (i.checked) return true; }
-    else if (i.value && i.value.trim() !== '') return true;
+    if (fieldDirty(i)) return true;
   }
   return false;
 }
@@ -122,9 +136,13 @@ function busy() { return fieldFocused() || hasDirtyField(); }
 
 function startPolling() { stopPolling(); pollTimer = setInterval(poll, POLL_MS); }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+// AIDEV-NOTE: the `polling` guard stops a slow refresh() from overlapping the next
+// interval tick (out-of-order renders, piled-up requests). stopPolling() clears the
+// timer; an already-in-flight refresh still settles and resets the flag in finally.
 async function poll() {
-  if (busy()) return;
-  try { await refresh(); } catch (e) { if (e !== AUTH) setRunDot(false); }
+  if (polling || busy()) return;
+  polling = true;
+  try { await refresh(); } catch (e) { if (e !== AUTH) setRunDot(false); } finally { polling = false; }
 }
 
 async function refresh() {
@@ -377,6 +395,13 @@ function parseUpstream(raw) {
   if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
   let u;
   try { u = new URL(s); } catch (_) { throw new Error('invalid upstream URL: ' + raw); }
+  // AIDEV-NOTE: reject (don't silently drop) URL parts the server's upstream has no
+  // field for — mirrors client.ParseUpstreamURL so the UI and CLI agree on what a
+  // valid upstream is. The scheme-prefix and default-port conveniences above are
+  // intentional UI-only sugar and are deliberately kept.
+  if (u.username || u.password) throw new Error('upstream URL must not contain userinfo: ' + raw);
+  if (u.pathname && u.pathname !== '/') throw new Error('upstream URL must not contain a path: ' + raw);
+  if (u.search || u.hash) throw new Error('upstream URL must not contain a query or fragment: ' + raw);
   const scheme = u.protocol.replace(':', '');
   const port = u.port ? parseInt(u.port, 10) : (scheme === 'https' ? 443 : 80);
   return { scheme, host: u.hostname, port };
@@ -498,6 +523,7 @@ async function onLogin(e) {
 
 function onLogout() {
   stopPolling();
+  settleConfirm(false); // resolve any open confirm promise and hide its overlay
   clearToken();
   expanded.clear();
   labelEditing.clear();
