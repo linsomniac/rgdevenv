@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 )
 
 // Store owns the persisted state file, a single-instance lock, and the
@@ -105,20 +104,6 @@ func fsyncDir(dir string) error {
 		return fmt.Errorf("store: fsync dir: %w", err)
 	}
 	return nil
-}
-
-// acquireLock takes an exclusive, non-blocking flock. flock associates the lock
-// with the open file description, so a second Open (even in-process) fails.
-func acquireLock(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("store: open lock %s: %w", path, err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("store: another rgdevenv instance holds %s: %w", path, err)
-	}
-	return f, nil
 }
 
 func loadState(path string) (*State, error) {
