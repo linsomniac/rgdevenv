@@ -12,6 +12,7 @@ import (
 	"github.com/realgo/rgdevenv/internal/auth"
 	"github.com/realgo/rgdevenv/internal/health"
 	"github.com/realgo/rgdevenv/internal/txn"
+	"github.com/realgo/rgdevenv/internal/ui"
 )
 
 // Deps are the dependencies for the management handler.
@@ -82,7 +83,11 @@ func (h *Handler) buildMux() http.Handler {
 	// <register-api-routes>
 
 	mux.Handle("/api/v1/", h.authMiddleware(api))
-	// AIDEV-TODO(phase2b): mount the static login shell + dashboard at "/".
+	// AIDEV-NOTE: the dashboard shell mounts at "/" OUTSIDE authMiddleware — it is
+	// data-free static assets (Phase 2d, §14). Go ServeMux longest-pattern precedence
+	// keeps "/api/v1/" and "/healthz" ahead of this root catch-all, so the mount does
+	// not bypass auth (asserted by ui_mount_test.go).
+	mux.Handle("/", ui.Handler())
 	return mux
 }
 

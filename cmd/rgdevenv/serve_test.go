@@ -122,11 +122,15 @@ func TestSetupServerWiring(t *testing.T) {
 		resp.TLS.PeerCertificates[0].Subject.CommonName != "*.sean.realgo.com" {
 		t.Fatalf("unexpected served certificate: %+v", resp.TLS)
 	}
-	resp.Body.Close()
-	// TLS handshake proves the cert loaded + listener bound; mgmt host 404s in phase 1.
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	// TLS handshake proves the cert loaded + listener bound; the mgmt-host root now
+	// serves the static dashboard shell (Phase 2d).
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Fatalf("root content-type = %q, want text/html; charset=utf-8", ct)
+	}
+	resp.Body.Close()
 
 	mgmtGet := func(path, token string) int {
 		req, _ := http.NewRequest("GET", fmt.Sprintf("https://127.0.0.1:%d%s", httpsPort, path), nil)
