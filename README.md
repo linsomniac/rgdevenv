@@ -537,7 +537,11 @@ Per-phase implementation plans are under `docs/superpowers/plans/`.
 
 ## License
 
-This repository does not currently declare a license. Treat it as proprietary to
-RealGo unless a `LICENSE` file is added.
+This project is dedicated to the public domain under the
+[CC0 1.0 Universal](LICENSE) (Creative Commons Zero, `CC0-1.0`) public-domain
+dedication. To the extent possible under law, the author has waived all
+copyright and related rights to this work. You may copy, modify, distribute,
+and use it — including for commercial purposes — without asking permission or
+providing attribution.
 
 Authored by Sean Reifschneider.
