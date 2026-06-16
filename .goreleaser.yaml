@@ -1,0 +1,73 @@
+# GoReleaser configuration — cross-compiles the rgdevenv binary and publishes
+# release archives + checksums to the GitHub Releases page. Driven by
+# .github/workflows/release.yml on a vX.Y.Z tag push.
+#
+# Validate locally without publishing:
+#   goreleaser check
+#   goreleaser build --snapshot --clean
+version: 2
+
+project_name: rgdevenv
+
+before:
+  hooks:
+    # AIDEV-NOTE: `go mod download` (not `go mod tidy`) on purpose — tidy can
+    # rewrite go.mod/go.sum and dirty the tree, which fails GoReleaser's
+    # dirty-state check. download only populates the module cache.
+    - go mod download
+
+builds:
+  - id: rgdevenv
+    main: ./cmd/rgdevenv
+    binary: rgdevenv
+    env:
+      - CGO_ENABLED=0 # static binary, matches the project's "single static binary" goal
+    flags:
+      - -trimpath
+    # AIDEV-NOTE: stamps the release tag into main.version. The symbol path is
+    # the MODULE import path (github.com/realgo/rgdevenv/...), NOT the GitHub
+    # repo name (linsomniac/rgdevenv). main.version must stay a `var` (see
+    # cmd/rgdevenv/serve.go) — `-X` cannot overwrite a const.
+    ldflags:
+      - -s -w -X github.com/realgo/rgdevenv/cmd/rgdevenv.version={{ .Version }}
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows-on-ARM is rare; skip it to keep the asset list to three binaries.
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: rgdevenv
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: git
+  filters:
+    exclude:
+      - "^chore:"
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: false
+  # Tags like v1.0.0-rc1 are published as pre-releases automatically.
+  prerelease: auto

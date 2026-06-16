@@ -5,3 +5,6 @@
 
 # Manual UI dev harness (Phase 2d) — never committed
 /cmd/uidev/
+
+# GoReleaser build output
+/dist/

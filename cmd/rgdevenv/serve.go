@@ -26,7 +26,11 @@ import (
 	"github.com/realgo/rgdevenv/internal/upstream"
 )
 
-const version = "0.1.0"
+// AIDEV-NOTE: must be a `var`, not a `const` — release builds stamp the git tag
+// in via `-ldflags -X github.com/realgo/rgdevenv/cmd/rgdevenv.version=...`
+// (see .goreleaser.yaml), and `-X` cannot overwrite a const. "0.1.0" is the
+// dev/default value used by plain `go build`.
+var version = "0.1.0"
 
 func newServeCmd() *cobra.Command {
 	var configPath string
