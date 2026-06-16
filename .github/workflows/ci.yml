@@ -1,0 +1,48 @@
+# Continuous integration: runs the same gate enforced locally — build, vet,
+# race-detected tests, gofmt, and golangci-lint — on every push to main and
+# every pull request. Release packaging lives in release.yml (tag-triggered).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede in-flight PR runs on the same ref; never cancel a main-branch run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt (must be clean)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
