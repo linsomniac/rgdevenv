@@ -49,7 +49,7 @@ Each LB row shows:
 Row interactions:
 - **Edit label** → `PATCH /api/v1/lbs/{name}` `{ "label": ... }`.
 - **Delete LB** → `DELETE /api/v1/lbs/{name}` (guarded by a confirm dialog warning that mappings and auto-allocated ports cascade).
-- **Expand** → an inline mappings table (Listen, Upstream, TLS, Health, delete) plus an **add/edit mapping form**: listen port, upstream URL, upstream-TLS mode, a **CA-name dropdown populated from `GET /api/v1/cas`**, and an `allocate` checkbox.
+- **Expand** → an inline mappings table (Listen, Upstream, TLS, Health, delete) plus an **add/edit mapping form**: listen port, a **listen-scheme select (`https`/`http`)** that maps to `listen_tls` (https is the default, matching the server; `http` is the equivalent of the CLI's `--no-tls`), upstream URL, upstream-TLS mode, a **CA-name dropdown populated from `GET /api/v1/cas`**, and an `allocate` checkbox.
   - Create mapping → `POST /api/v1/lbs/{name}/mappings`.
   - Replace mapping → `PUT /api/v1/lbs/{name}/mappings/{port}`.
   - Delete mapping → `DELETE /api/v1/lbs/{name}/mappings/{port}`.

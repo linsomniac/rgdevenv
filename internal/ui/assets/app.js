@@ -332,6 +332,11 @@ function renderMappingsPanel(lb, maps) {
 
 function renderMappingForm(lb) {
   const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'listen port', class: 'w-port' });
+  // Listen-side scheme → listen_tls. https (the server/CLI default) = TLS; http is
+  // the equivalent of the CLI's `--no-tls`. Applies to allocated mappings too.
+  const listenScheme = el('select', { title: 'listen port scheme' },
+    el('option', { value: 'https' }, 'https'),
+    el('option', { value: 'http' }, 'http'));
   const url = el('input', { type: 'text', placeholder: 'upstream URL (http://localhost:3000)', class: 'grow' });
   const mode = el('select', null,
     el('option', { value: 'verify' }, 'verify'),
@@ -343,7 +348,7 @@ function renderMappingForm(lb) {
   const submit = el('button', { class: 'btn-primary', type: 'submit' }, 'Add');
 
   const form = el('form', { class: 'inline-form map-form' },
-    port, url, mode, ca,
+    port, listenScheme, url, mode, ca,
     el('label', { class: 'chk' }, allocate, ' allocate'),
     submit);
   form._editPort = null; // non-null → replace (PUT) that listen port
@@ -353,7 +358,7 @@ function renderMappingForm(lb) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const body = buildMappingBody(port.value, url.value, mode.value, ca.value, allocate.checked);
+      const body = buildMappingBody(port.value, url.value, listenScheme.value === 'https', mode.value, ca.value, allocate.checked);
       if (form._editPort != null) await api('PUT', mapURL(lb.name, form._editPort), body);
       else await api('POST', mapURL(lb.name), body);
       clearError();
@@ -366,6 +371,7 @@ function renderMappingForm(lb) {
     form._editPort = m.listen_port;
     port.value = m.listen_port;
     port.readOnly = true;
+    listenScheme.value = m.listen_tls ? 'https' : 'http';
     url.value = m.upstream ? (m.upstream.scheme + '://' + m.upstream.host + ':' + m.upstream.port) : '';
     mode.value = (m.upstream && m.upstream.tls && m.upstream.tls.mode) || 'verify';
     ca.value = (m.upstream && m.upstream.tls && m.upstream.tls.ca_name) || '';
@@ -377,8 +383,8 @@ function renderMappingForm(lb) {
   return form;
 }
 
-function buildMappingBody(portStr, urlStr, mode, caName, allocate) {
-  const body = {};
+function buildMappingBody(portStr, urlStr, listenTls, mode, caName, allocate) {
+  const body = { listen_tls: listenTls };
   if (String(portStr).trim() !== '') body.listen_port = parseInt(portStr, 10);
   if (allocate) {
     body.allocate = true;
