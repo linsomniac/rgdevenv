@@ -24,12 +24,16 @@ builds:
       - CGO_ENABLED=0 # static binary, matches the project's "single static binary" goal
     flags:
       - -trimpath
-    # AIDEV-NOTE: stamps the release tag into main.version. The symbol path is
-    # the MODULE import path (github.com/realgo/rgdevenv/...), NOT the GitHub
-    # repo name (linsomniac/rgdevenv). main.version must stay a `var` (see
-    # cmd/rgdevenv/serve.go) — `-X` cannot overwrite a const.
+    # AIDEV-NOTE: stamps the release tag into the package-`main` `version` var
+    # (see cmd/rgdevenv/serve.go — it must stay a `var`; `-X` cannot overwrite a
+    # const). The symbol MUST be `main.version`, NOT the full module path
+    # (github.com/realgo/rgdevenv/cmd/rgdevenv.version): with `-trimpath` (set in
+    # `flags` above) the linker rewrites the main package's recorded import path,
+    # so a full-path `-X` silently no-ops and the binary keeps its default
+    # version. Verified: `go build -trimpath -ldflags '-X main.version=X'` stamps;
+    # the full-path form under -trimpath does not.
     ldflags:
-      - -s -w -X github.com/realgo/rgdevenv/cmd/rgdevenv.version={{ .Version }}
+      - -s -w -X main.version={{ .Version }}
     goos:
       - linux
       - windows

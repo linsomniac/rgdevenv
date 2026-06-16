@@ -42,9 +42,11 @@ release builds overwrite it with the tag.
 - `builds`: one build —
   - `main: ./cmd/rgdevenv`, `binary: rgdevenv`
   - `env: [CGO_ENABLED=0]`, `flags: [-trimpath]`
-  - `ldflags: -s -w -X github.com/realgo/rgdevenv/cmd/rgdevenv.version={{ .Version }}`
-    (the `-X` path uses the **module** path `realgo`, not the GitHub repo name
-    `linsomniac`)
+  - `ldflags: -s -w -X main.version={{ .Version }}` — the `version` var lives in
+    package `main` (`cmd/rgdevenv`). The symbol **must** be `main.version`, not
+    the full module path: `-trimpath` (set above) rewrites the main package's
+    recorded import path, so a full-path `-X` silently no-ops and the binary
+    keeps its `0.1.0` default. (Verified empirically against goreleaser 2.15.4.)
   - `goos: [linux, windows]`, `goarch: [amd64, arm64]`,
     `ignore: [{goos: windows, goarch: arm64}]` → exactly 3 binaries.
 - `archives`: name `rgdevenv_{{.Version}}_{{.Os}}_{{.Arch}}`; `tar.gz` default,
