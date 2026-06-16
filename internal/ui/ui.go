@@ -18,7 +18,13 @@ var assets embed.FS
 // It forbids inline scripts/styles, which is why app.css and app.js are separate
 // embedded files. connect-src 'self' permits the dashboard's same-origin fetches
 // to /api/v1/*.
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:"
+//
+// AIDEV-NOTE: font-src 'self' data: is permissive for fonts only. The page uses
+// system fonts (no @font-face), but browser extensions (e.g. Dark Reader) inject
+// data: fonts that would otherwise trip default-src 'none' and spam the console.
+// Fonts are inert and style-src 'self' still gates any @font-face injection, so
+// this does not weaken the script/connect/style protections.
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:"
 
 type file struct {
 	body  []byte
