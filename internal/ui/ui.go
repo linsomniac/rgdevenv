@@ -24,7 +24,14 @@ var assets embed.FS
 // data: fonts that would otherwise trip default-src 'none' and spam the console.
 // Fonts are inert and style-src 'self' still gates any @font-face injection, so
 // this does not weaken the script/connect/style protections.
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:"
+//
+// AIDEV-NOTE: frame-ancestors/base-uri/form-action are NOT covered by default-src
+// 'none' (frame-ancestors has no default-src fallback), so they are set explicitly.
+// The dashboard is served on the loopback management port; frame-ancestors 'none'
+// blocks an external page from framing it to clickjack authenticated actions, and
+// base-uri 'none' / form-action 'self' close <base>-injection and form-exfil vectors
+// (the page uses root-relative asset paths and JS-handled, action-less forms).
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
 type file struct {
 	body  []byte

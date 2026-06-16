@@ -49,7 +49,7 @@ func TestAssetContentTypes(t *testing.T) {
 }
 
 func TestCSPHeaderPresent(t *testing.T) {
-	const want = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:"
+	const want = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 	for _, p := range []string{"/", "/app.js", "/nope"} {
 		if got := get(t, p).Header().Get("Content-Security-Policy"); got != want {
 			t.Fatalf("CSP on %s = %q, want %q", p, got, want)
